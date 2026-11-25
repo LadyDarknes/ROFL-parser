@@ -1,6 +1,6 @@
 # ROFL Parser
 
-Read League of Legends replay files from disk. Inspect packet IDs, timestamps, sizes and raw payloads, or export decoded combat events on supported builds.
+Read League of Legends replay files from disk. Inspect packet IDs, timestamps, sizes and raw payloads. On supported builds, combat export covers all champions in the recorded match stream.
 
 ## Install
 
@@ -33,7 +33,9 @@ rofl-parser combat match.rofl --binary client-snapshot.exe --output combat.jsonl
 | `16.19.823.0722` | Verified on one replay | Raw export |
 | `16.23.841.8428` | Verified on two replays | Spell casts, damage, basic attacks, missiles, buff applications and removals |
 
-The 16.23 decoder identifies Ezreal W marks and Recall buff transitions. Recall completion, stat histories, movement routes and item timelines are open work. Cooldown, resource cost and cast positions retain candidate labels where their meaning is still being checked.
+Spell casts, damage, attacks, missiles and buffs use shared packet types. Known buff effects can also receive [specific labels](docs/decoding.md#the-1623-combat-profile).
+
+Calculating ability hit rates is a separate analysis step. Some abilities require their own rules to link casts with damage, missiles or applied effects. Recall completion, stat histories, movement routes and item timelines are open work. Cooldown, resource cost and cast positions retain candidate labels where their meaning is still being checked.
 
 See [packet profiles and output](docs/decoding.md) for field provenance and build validation.
 
