@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Local game data and decoder inputs
+/local/
+*.rofl
+*.exe
+*.dll
+*.dmp
+*.idb
+*.i64
+*.jsonl
+*.jsonl.gz
