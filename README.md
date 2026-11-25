@@ -2,7 +2,7 @@
 
 Read League of Legends replay files from disk. Inspect packet IDs, timestamps, sizes and raw payloads. On supported builds, combat export covers all champions in the recorded match stream.
 
-Nearly all of this project's original code, tests, and documentation were AI-generated with OpenAI Codex. The maintainer set the project direction, supplied replay samples, and provided feedback.
+Nearly all of this project's original code, tests, and documentation were AI-generated with OpenAI Codex.
 
 ## Install
 
@@ -48,6 +48,6 @@ python -m pip install -e ".[combat]"
 python -m unittest discover -s tests -v
 ```
 
-Tests generate small synthetic replay files. Local game data and exported events belong in the ignored `local/` directory.
+Tests generate small synthetic replay files.
 
 Credit to [ROFL-X](https://github.com/Toastaspiring/ROFL-X) for the transport specification and offline decoder research. The adapted emulator carries the upstream MIT notice in [combat.py](src/rofl_parser/combat.py).
