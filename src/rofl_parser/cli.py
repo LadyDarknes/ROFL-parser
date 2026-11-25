@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from . import transport
+from . import timeline, transport
 from .profiles.v16_23_841_8428 import PACKETS
 
 
@@ -39,9 +39,19 @@ def main(argv: list[str] | None = None) -> int:
     decode.add_argument("--raw", action="store_true", help="include raw payload bytes as hex")
     decode.set_defaults(run=run_combat)
 
+    report = commands.add_parser("timeline", help="sample player stats from an exported event stream")
+    report.add_argument("replay", type=Path)
+    report.add_argument("--events", type=Path, required=True, help="JSONL from the combat command")
+    report.add_argument("--player-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
+    report.add_argument("--opponent-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
+    report.set_defaults(run=timeline.run)
+
     args = parser.parse_args(argv)
     if args.command == "combat" and args.limit is not None and args.limit < 1:
         decode.error("--limit must be at least 1")
+    if args.command == "timeline" and args.opponent_id is not None:
+        if args.player_id is None or args.opponent_id == args.player_id:
+            report.error("--opponent-id requires a different --player-id")
     try:
         return args.run(args)
     except ImportError as exc:

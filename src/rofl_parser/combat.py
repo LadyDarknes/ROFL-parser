@@ -107,6 +107,7 @@ class Decoder:
         self.capture_start = self.capture_end = 0
         self.reads: set[int] = set()
         self.plain: dict[int, int] = {}
+        self.champions: set[int] = set()
         for section in pe.sections:
             self.machine.mem_write(self.base + section.VirtualAddress, section.get_data())
         for address, size in (
@@ -293,7 +294,7 @@ class Decoder:
                 data[address - packet] = value
         if U32.unpack_from(data, 0x0C)[0] != sender:
             raise DecodeError("decoded sender differs from the replay block header")
-        return decode_fields(packet_id, data, self._read_heap)
+        return decode_fields(packet_id, data, self._read_heap, self.champions)
 
 
 def write_rows(args: argparse.Namespace) -> None:
@@ -315,6 +316,7 @@ def write_rows(args: argparse.Namespace) -> None:
 
 def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, output: TextIO) -> None:
     count = 0
+    decoder.champions.clear()
     selected = set(args.packet_id or PACKETS)
     read_ids = selected.copy()
     lane_minions: set[int] = set()

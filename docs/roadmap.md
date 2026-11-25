@@ -10,7 +10,7 @@ The current `16.23.841.8428` profile exports casts, damage, basic attacks, missi
 
 ## 1. Match clock, entity identity, and player state
 
-The 16.23 profile now exports lane minion deaths and killer IDs. Next, validate player CS credit and add `StatUpdate` for counters and resources, then `LevelUp`. Farm and lane comparisons depend on these events. [Current death-event coverage](decoding.md#unit-deaths)
+The 16.23 profile exports lane minion deaths and killer IDs, `StatUpdate` for recorded gold, XP, HP and primary resource, and `LevelUp`. The minute report includes gold and XP differences. Player CS credit is the next dependency for farm comparisons. [Current profile and validation](decoding.md)
 
 - Build entity lifetimes from creation and removal events. Track the match, entity ID, and lifetime when joining records. Use keyframes to restore state and record the source of each restoration.
 - Reconstruct per-player timelines for CS, total gold earned, unspent gold, XP, HP, mana, level, and attack speed. Track which updates set an absolute value and which report a delta.

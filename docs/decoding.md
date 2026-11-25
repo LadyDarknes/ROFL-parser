@@ -10,21 +10,25 @@ The [profile module](../src/rofl_parser/profiles/v16_23_841_8428.py) maps packet
 
 | ID | Exported event | Main fields |
 | --- | --- | --- |
+| `0x002D` | `ContextualNotification` / Recall outcomes | Unit, contextual notification name |
 | `0x0060` | `WaypointGroup` | Sequence, unit IDs, movement speeds, X/Z points |
 | `0x00BB` | `EntityCreate` | Object ID, owner ID, position, object and skin names, spawn time |
 | `0x00BD` | `EntityCreate` | Lane minion ID, spawner ID, spawn time |
+| `0x0135` | `StatUpdate` | Observed champion gold, XP, health and primary resource updates |
 | `0x0167` | `BasicAttackMinion` | Attacker, target, position |
 | `0x0212` | `DamageEvent` | Source, target, amount, effect hash |
 | `0x0234` | `SpellCast` | Caster, spell hash, cast sequence, timing, slot codes |
 | `0x0277` | `BuffAdd2` | Caster, target, hash, slot |
 | `0x027F` | `MissileTrajectory` | Caster, missile ID, cast sequence, positions |
 | `0x0346` | `BuffRemove2` | Target, hash, slot |
+| `0x0348` | `ItemAcquired` / `ItemPurchase` | Unit, item, slot, price paid, gold after acquisition |
 | `0x03E0` | `BasicAttack` | Attacker, target, position |
+| `0x03F3` | `LevelUp` | Unit, resulting level, update type code |
 | `0x04AD` | `UnitDeath` / `MinionDeath` | Victim ID, killer ID, position when available |
 
 The decoder selects packets by build and packet ID across the whole match. For example, every decoded `0x0234` row is a `SpellCast`, regardless of its caster. Buff rows with known hashes can get a more specific label. `EzrealWMarkApplied` is the label for the Essence Flux mark carried by a `BuffAdd2` row. Other buff applications still appear as `BuffAdd2`.
 
-`RecallBuffApplied` and `RecallBuffRemoved` label buff transitions for any champion. A completed or interrupted recall can be classified once a separate finish signal is verified.
+`RecallBuffApplied` and `RecallBuffRemoved` label buff transitions for any champion. The contextual notifications `RecallLeadIn`, `RecallWindDown` and `RecallCancel` emit `RecallStarted`, `RecallCompleted` and `RecallCanceled` respectively. The two validation replays had 97 completions and 34 cancellations, each matching a Recall buff lifetime.
 
 Event JSONL includes the replay build, match name, packet ID, timestamp and decoded fields. `chunk_file_offset` is relative to the file. `block_offset` and `payload_offset` are relative to the decompressed chunk. With `--raw`, the hex bytes begin at `payload_offset`.
 
@@ -39,6 +43,14 @@ On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,4
 `0x04AD` exports a death event with the replay block time in `t`, the victim in `fields.entity_id`, and the killing unit in `fields.killer_id`. An earlier live lane-minion spawn for the same entity ID gives the event the `MinionDeath` label. Other victims, including those with an unavailable spawn, use `UnitDeath`. The exporter reads the spawn context even when filtering the output to `--packet-id 0x04AD`. The position is `null` when the packet leaves it unset.
 
 The two validation replays contained 4,327 death records, including 3,190 joined to lane minion spawns. Each of the 3,190 killer IDs matched the source of the final decoded damage to that minion in the same replay tick. The end-of-match CS comparison still had gaps. This event provides the killing unit, and player CS credit is tracked separately. [Historical packet family](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/npc_die.rs)
+
+### Player state and economy
+
+The replication buffer groups field masks and length-prefixed records by entity. A full champion record identifies an entity for subsequent stat updates. The exporter reports decoded champion fields in `updates` and retains an unresolved-record count. The structure and the field order for earlier builds are documented by [rofl-parser's replication analysis](https://github.com/shyunku-libraries/rofl-parser/blob/main/patches/16.15/replication.json).
+
+In the two 16.23 samples, the last observed total gold and XP agree with the footer after integer truncation for all 20 players. The last observed levels agree as integers. The minute report keeps each field's last observed timestamp. Primary resource represents the champion's resource bar, which can contain mana, energy or another resource. `cs` remains `null`. Observed lane killing blows are reported separately.
+
+The item acquisition packet exports the item ID, slot, price and remaining gold. A positive price gives the event the `ItemPurchase` label. Use the acquisition rows to follow item additions. Sale, undo, and component removal still require their own event mappings.
 
 ## Adding a build
 

@@ -3,6 +3,7 @@
 import struct
 from collections.abc import Callable
 
+from .champion_state import read_champion_updates
 from .waypoints import read_paths
 
 VERSION = "16.23.841.8428"
@@ -11,34 +12,51 @@ BINARY_SHA256 = "64a3d49aa9a3dbf69c6c2bda8e7abd42f33a0708aa655892b818476b609a161
 OBJECT_SPAWN_ID = 0x00BB
 LANE_MINION_SPAWN_ID = 0x00BD
 UNIT_DEATH_ID = 0x04AD
+STAT_UPDATE_ID = 0x0135
+LEVEL_UP_ID = 0x03F3
+CONTEXT_NOTIFICATION_ID = 0x002D
+ITEM_ACQUISITION_ID = 0x0348
 PACKETS = {
+    CONTEXT_NOTIFICATION_ID: ("ContextualNotification", 0x198AFD0, 0xE01EC0),
     0x0060: ("WaypointGroup", 0x19894B0, 0xE31D90),
     OBJECT_SPAWN_ID: ("ObjectSpawn", 0x198A088, 0xE2DA70),
     LANE_MINION_SPAWN_ID: ("LaneMinionSpawn", 0x198FC50, 0xE9F7B0),
+    STAT_UPDATE_ID: ("ReplicatedFields", 0x19869B0, 0xCFA900),
     0x0167: ("BasicAttackPosMinion", 0x198CD60, 0xEA12C0),
     0x0212: ("DamageEvent", 0x1986078, 0xD26E90),
     0x0234: ("SpellCast", 0x198CDC0, 0xEB8130),
     0x0277: ("BuffAdd2", 0x198C770, 0xEB13D0),
     0x027F: ("MissileReplication", 0x198D258, 0xEAC290),
     0x0346: ("BuffRemove2", 0x198C880, 0xEB45B0),
+    ITEM_ACQUISITION_ID: ("BuyItemAnswer", 0x19899C8, 0xDC9680),
     0x03E0: ("BasicAttackPos", 0x198CD00, 0xEA1480),
+    LEVEL_UP_ID: ("NpcLevelUp", 0x1985D28, 0xCFA4E0),
     UNIT_DEATH_ID: ("NpcDeathMapView", 0x1985EA0, 0xCF8B30),
 }
 EVENTS = {
+    CONTEXT_NOTIFICATION_ID: "ContextualNotification",
     0x0060: "WaypointGroup",
     OBJECT_SPAWN_ID: "EntityCreate",
     LANE_MINION_SPAWN_ID: "EntityCreate",
+    STAT_UPDATE_ID: "StatUpdate",
     0x0167: "BasicAttackMinion",
     0x0212: "DamageEvent",
     0x0234: "SpellCast",
     0x0277: "BuffAdd2",
     0x027F: "MissileTrajectory",
     0x0346: "BuffRemove2",
+    ITEM_ACQUISITION_ID: "ItemAcquired",
     0x03E0: "BasicAttack",
+    LEVEL_UP_ID: "LevelUp",
     UNIT_DEATH_ID: "UnitDeath",
 }
 EZREAL_W_MARK_HASH = 0x00931FC8
 RECALL_HASH = 0x078B982C
+RECALL_NOTIFICATIONS = {
+    "RecallLeadIn": "RecallStarted",
+    "RecallWindDown": "RecallCompleted",
+    "RecallCancel": "RecallCanceled",
+}
 FACTORY_RVA = 0xCD99B0
 ALLOCATOR_RVA = 0xF79190
 FREE_RVAS = (0xF791C0, 0xF912D0)
@@ -61,7 +79,8 @@ def read_string(data: bytearray, offset: int, read_heap: Callable[[int, int], by
 
 
 def decode_fields(
-    packet_id: int, data: bytearray, read_heap: Callable[[int, int], bytes] | None = None
+    packet_id: int, data: bytearray, read_heap: Callable[[int, int], bytes] | None = None,
+    champions: set[int] | None = None,
 ) -> dict:
     def uint(offset: int) -> int:
         return U32.unpack_from(data, offset)[0]
@@ -75,8 +94,29 @@ def decode_fields(
     def xyz(offset: int) -> tuple[float, float, float]:
         return VEC3.unpack_from(data, offset)
 
-    if packet_id in {0x0060, OBJECT_SPAWN_ID} and read_heap is None:
+    if packet_id in {0x0060, OBJECT_SPAWN_ID, STAT_UPDATE_ID, CONTEXT_NOTIFICATION_ID} and read_heap is None:
         raise ValueError("packet reader requires access to its decoded heap buffer")
+
+    if packet_id == CONTEXT_NOTIFICATION_ID:
+        return {"entity_id": uint(0x0C), "name": read_string(data, 0x10, read_heap)}
+
+    if packet_id == STAT_UPDATE_ID:
+        count, size = uint(0x28), uint(0x20)
+        pointer, = POINTER.unpack_from(data, 0x18)
+        buffer = read_heap(pointer, size) if size else b""
+        return read_champion_updates(buffer, count, champions if champions is not None else set())
+
+    if packet_id == LEVEL_UP_ID:
+        return {"entity_id": uint(0x0C), "level": data[0x11], "type_code": data[0x10]}
+
+    if packet_id == ITEM_ACQUISITION_ID:
+        return {
+            "entity_id": uint(0x0C),
+            "item_id": uint(0x20),
+            "slot": uint(0x24),
+            "price_paid": real(0x88),
+            "gold_after": real(0x10),
+        }
 
     if packet_id == 0x0060:
         size = uint(0x20)
@@ -187,6 +227,10 @@ def decode_fields(
 
 
 def event_name(packet_id: int, fields: dict) -> str:
+    if packet_id == CONTEXT_NOTIFICATION_ID:
+        return RECALL_NOTIFICATIONS.get(fields["name"], "ContextualNotification")
+    if packet_id == ITEM_ACQUISITION_ID and fields["price_paid"] > 0:
+        return "ItemPurchase"
     if packet_id == 0x0277:
         if fields["buff_hash"] == EZREAL_W_MARK_HASH:
             return "EzrealWMarkApplied"
