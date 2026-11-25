@@ -1,14 +1,61 @@
+import argparse
 import importlib.util
+import io
+import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
+from rofl_parser.transport import Chunk, Packet
 from rofl_parser.profiles.v16_23_841_8428 import RECALL_HASH, decode_fields, event_name
 from rofl_parser.profiles.waypoints import read_paths
 
 
 class CombatProfileTests(unittest.TestCase):
+    def test_unit_death_preserves_killer_and_uses_null_for_absent_position(self):
+        body = bytearray(0x58)
+        struct.pack_into("<I", body, 0x0C, 0x400002E6)
+        struct.pack_into("<I", body, 0x50, 0x40000154)
+        self.assertEqual(decode_fields(0x04AD, body), {
+            "entity_id": 0x400002E6, "killer_id": 0x40000154, "position": None,
+        })
+        struct.pack_into("<fff", body, 0x34, 1200.0, 15.0, 3400.0)
+        self.assertEqual(decode_fields(0x04AD, body)["position"], (1200.0, 15.0, 3400.0))
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("unicorn") and importlib.util.find_spec("pefile"),
+        "combat extra is optional",
+    )
+    def test_filtered_deaths_use_spawn_context_and_stop_at_the_row_limit(self):
+        from rofl_parser.combat import export_rows
+
+        lane, unknown, reused = 0x400002E6, 0x400002E7, 0x400002E8
+        chunk = Chunk(1, 0, 1 << 24, 100, 0, 12, 30, None)
+        source = (
+            (0x00BD, lane), (0x00BD, reused), (0x00BB, reused),
+            (0x04AD, lane), (0x04AD, unknown), (0x04AD, reused), (0x04AD, lane),
+        )
+        packets = [
+            Packet(chunk, index, index, 0, index, None, packet_id, entity, 1, b"x")
+            for index, (packet_id, entity) in enumerate(source, start=1)
+        ]
+        replay = Mock(path=Path("sample.rofl"))
+        replay.iter_packets.return_value = iter(packets)
+        decoder = Mock()
+        decoder.decode.side_effect = lambda packet_id, sender, payload: {"entity_id": sender}
+        output = io.StringIO()
+        export_rows(replay, decoder, argparse.Namespace(packet_id=[0x04AD], raw=False, limit=3), output)
+
+        replay.iter_packets.assert_called_once_with(
+            streams={1}, packet_ids={0x00BD, 0x00BB, 0x04AD}, include_payload=True,
+        )
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([r["event"] for r in rows], ["MinionDeath", "UnitDeath", "UnitDeath"])
+        self.assertEqual([r["fields"]["entity_id"] for r in rows], [lane, unknown, reused])
+        self.assertEqual(decoder.decode.call_count, 6)
+
     def test_waypoint_group_decodes_signed_deltas_and_multiple_units(self):
         first = struct.pack("<HIf", 0x0205, 0x40000051, 350.0)
         first += b"\x00\x01" + struct.pack("<hhbh", -100, 100, -5, 160)

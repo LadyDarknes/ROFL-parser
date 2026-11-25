@@ -58,12 +58,15 @@ from .profiles.v16_23_841_8428 import (
     BINARY_SHA256,
     FACTORY_RVA,
     FREE_RVAS,
+    LANE_MINION_SPAWN_ID,
     MEMSET_RVA,
+    OBJECT_SPAWN_ID,
     PACKETS,
     PROTOCOL_HEADER,
     SENDER_TABLE_RVA,
     TEAM_REGISTRY_COUNT,
     TEAM_REGISTRY_RVA,
+    UNIT_DEATH_ID,
     VERSION,
     decode_fields,
     event_name,
@@ -312,16 +315,33 @@ def write_rows(args: argparse.Namespace) -> None:
 
 def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, output: TextIO) -> None:
     count = 0
+    selected = set(args.packet_id or PACKETS)
+    read_ids = selected.copy()
+    lane_minions: set[int] = set()
+    if UNIT_DEATH_ID in selected:
+        read_ids.update((LANE_MINION_SPAWN_ID, OBJECT_SPAWN_ID))
     for packet in replay.iter_packets(
-        streams={1}, packet_ids=set(args.packet_id or PACKETS), include_payload=True
+        streams={1}, packet_ids=read_ids, include_payload=True
     ):
+        packet_id = packet.packet_id
         try:
-            fields = decoder.decode(packet.packet_id, packet.param, packet.payload)
+            fields = decoder.decode(packet_id, packet.param, packet.payload)
         except (UcError, ValueError) as exc:
             raise DecodeError(
                 f"chunk {packet.chunk.chunk_id}, block 0x{packet.block_offset:x}, "
-                f"ID 0x{packet.packet_id:04x}: {exc}"
+                f"ID 0x{packet_id:04x}: {exc}"
             ) from exc
+        event = event_name(packet_id, fields)
+        if UNIT_DEATH_ID in selected:
+            if packet_id == LANE_MINION_SPAWN_ID:
+                lane_minions.add(fields["entity_id"])
+            elif packet_id == OBJECT_SPAWN_ID:
+                lane_minions.discard(fields["entity_id"])
+            elif packet_id == UNIT_DEATH_ID and fields["entity_id"] in lane_minions:
+                event = "MinionDeath"
+                lane_minions.remove(fields["entity_id"])
+        if packet_id not in selected:
+            continue
         row = {
             "version": VERSION,
             "match": replay.path.stem,
@@ -331,9 +351,9 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
             "block_offset": packet.block_offset,
             "payload_offset": packet.payload_offset,
             "t": packet.timestamp,
-            "pid": packet.packet_id,
-            "packet_name": PACKETS[packet.packet_id][0],
-            "event": event_name(packet.packet_id, fields),
+            "pid": packet_id,
+            "packet_name": PACKETS[packet_id][0],
+            "event": event,
             "sender": packet.param,
             "length": packet.payload_size,
             "fields": fields,

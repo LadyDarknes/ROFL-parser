@@ -20,6 +20,7 @@ The [profile module](../src/rofl_parser/profiles/v16_23_841_8428.py) maps packet
 | `0x027F` | `MissileTrajectory` | Caster, missile ID, cast sequence, positions |
 | `0x0346` | `BuffRemove2` | Target, hash, slot |
 | `0x03E0` | `BasicAttack` | Attacker, target, position |
+| `0x04AD` | `UnitDeath` / `MinionDeath` | Victim ID, killer ID, position when available |
 
 The decoder selects packets by build and packet ID across the whole match. For example, every decoded `0x0234` row is a `SpellCast`, regardless of its caster. Buff rows with known hashes can get a more specific label. `EzrealWMarkApplied` is the label for the Essence Flux mark carried by a `BuffAdd2` row. Other buff applications still appear as `BuffAdd2`.
 
@@ -32,6 +33,12 @@ Event JSONL includes the replay build, match name, packet ID, timestamp and deco
 Each `WaypointGroup` contains a `paths` array. Each path has a `unit`, `speed` and `points` array. `points` represents the route update sent to the client. Join `unit` to `entity_id` from an `EntityCreate` event within the same match. Spawn coverage currently comes from two packet classes. `kind` distinguishes `object` from `lane_minion`. Objects have an `owner_id` when one is present. Lane minions have a `spawner_id`.
 
 On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,432 paths. Every one of the 3,300 recorded lane minion spawns matched a unit ID in the waypoint stream. The object spawn class contributed another 1,222 rows. The waypoint entry format is credited to [ROFL-X](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/waypoints.rs).
+
+### Unit deaths
+
+`0x04AD` exports a death event with the replay block time in `t`, the victim in `fields.entity_id`, and the killing unit in `fields.killer_id`. An earlier live lane-minion spawn for the same entity ID gives the event the `MinionDeath` label. Other victims, including those with an unavailable spawn, use `UnitDeath`. The exporter reads the spawn context even when filtering the output to `--packet-id 0x04AD`. The position is `null` when the packet leaves it unset.
+
+The two validation replays contained 4,327 death records, including 3,190 joined to lane minion spawns. Each of the 3,190 killer IDs matched the source of the final decoded damage to that minion in the same replay tick. The end-of-match CS comparison still had gaps. This event provides the killing unit, and player CS credit is tracked separately. [Historical packet family](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/npc_die.rs)
 
 ## Adding a build
 
