@@ -44,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--events", type=Path, required=True, help="JSONL from the combat command")
     report.add_argument("--player-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
     report.add_argument("--opponent-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
+    report.add_argument("--casts", action="store_true", help="include observed Q/W/E/R cast rows and footer counters")
     report.set_defaults(run=timeline.run)
 
     args = parser.parse_args(argv)

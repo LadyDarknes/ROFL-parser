@@ -3,7 +3,7 @@ import unittest
 
 from rofl_parser.profiles.champion_state import CHAMPION_GROUP_MASKS, read_champion_updates
 from rofl_parser.profiles.v16_23_841_8428 import decode_fields, event_name
-from rofl_parser.timeline import build_report
+from rofl_parser.timeline import build_cast_report, build_report
 
 
 def update(time, entity, **values):
@@ -82,6 +82,36 @@ class PlayerStateTests(unittest.TestCase):
         self.assertEqual(data["coverage"]["unresolved_stat_records"], 2)
         self.assertIsNone(data["snapshots"][6]["players"][0]["hp"])
         self.assertEqual(data["snapshots"][6]["players"][0]["level"]["value"], 2)
+
+    def test_cast_report_preserves_repeated_sequences_and_ambiguous_footer(self):
+        events = [
+            update(0, 40, total_gold=500.8, xp=600.1),
+            update(0, 10, total_gold=500.8, xp=600.1),
+            {"t": 1, "event": "LevelUp", "fields": {"entity_id": 40, "level": 2}},
+            {"t": 1, "event": "LevelUp", "fields": {"entity_id": 10, "level": 3}},
+        ]
+        for time, slot in [(5, 0), (8, 0), (10, 5)]:
+            events.append({
+                "t": time, "event": "SpellCast",
+                "fields": {"caster": 40, "code_92": slot, "spell_hash": 27, "cast_seq": 31},
+            })
+        participants = (
+            {"GOLD_EARNED": "500", "EXP": "600", "LEVEL": "3", "SPELL1_CAST": "4"},
+            {"GOLD_EARNED": "500", "EXP": "600", "LEVEL": "2", "SPELL1_CAST": "1"},
+        )
+        report = build_cast_report(events, [40], participants)[0]
+        self.assertEqual(report["slots"]["Q"], {
+            "observed_count": 2, "footer_count": 1, "packet_count_agrees": False,
+            "observations": [
+                {"t": 5, "spell_hash": 27, "cast_seq": 31}, {"t": 8, "spell_hash": 27, "cast_seq": 31},
+            ],
+        })
+        self.assertEqual(report["other_slot_rows"], 1)
+        ambiguous = build_cast_report(events, [40], (*participants, participants[1]))[0]
+        self.assertIsNone(ambiguous["slots"]["Q"]["footer_count"])
+        absent = build_cast_report(events[:4], [40], participants)[0]
+        self.assertIsNone(absent["slots"]["Q"]["observed_count"])
+        self.assertEqual(absent["slots"]["Q"]["footer_count"], 1)
 
 
 if __name__ == "__main__":

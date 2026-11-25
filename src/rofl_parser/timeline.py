@@ -10,13 +10,15 @@ from .transport import Replay
 STATE_FIELDS = ("total_gold", "current_gold", "xp", "hp", "max_hp",
                 "primary_resource", "max_primary_resource", "level")
 CHECKPOINTS = (5, 10, 15)
+TIMELINE_EVENTS = {"StatUpdate", "LevelUp", "MinionDeath", "UnitDeath"}
 
 
 def observation(value: int | float, time: float, measurement: str = "direct") -> dict:
     return {"value": value, "observed_at": time, "measurement": measurement}
 
 
-def load_events(file, replay: Replay) -> list[dict]:
+def load_events(file, replay: Replay, *, include_casts: bool = False) -> list[dict]:
+    selected = TIMELINE_EVENTS | {"SpellCast"} if include_casts else TIMELINE_EVENTS
     events = []
     for line_number, line in enumerate(file, start=1):
         row = json.loads(line)
@@ -25,9 +27,26 @@ def load_events(file, replay: Replay) -> list[dict]:
         time = row["t"]
         if not math.isfinite(time):
             raise ValueError(f"event line {line_number} has an invalid timestamp")
-        if row["event"] in {"StatUpdate", "LevelUp", "MinionDeath", "UnitDeath"}:
+        if row["event"] in selected:
             events.append(row)
     return sorted(events, key=lambda row: row["t"])
+
+
+def apply_state(known: dict, row: dict) -> None:
+    fields = row["fields"]
+    if row["event"] == "LevelUp":
+        known[fields["entity_id"]]["level"] = observation(fields["level"], row["t"])
+        return
+    if fields["unresolved_records"]:
+        for values in known.values():
+            for name in STATE_FIELDS:
+                if name != "level":
+                    values.pop(name, None)
+    for update in fields["updates"]:
+        entity = update["entity_id"]
+        for name in STATE_FIELDS:
+            if name in update:
+                known[entity][name] = observation(update[name], row["t"])
 
 
 def build_report(events: list[dict], duration: float, player: int | None, opponent: int | None) -> dict:
@@ -60,19 +79,8 @@ def build_report(events: list[dict], duration: float, player: int | None, oppone
             fields = row["fields"]
             observed_at = row["t"]
             index += 1
-            if row["event"] == "StatUpdate":
-                if fields["unresolved_records"]:
-                    for values in known.values():
-                        for name in STATE_FIELDS:
-                            if name != "level":
-                                values.pop(name, None)
-                for update in fields["updates"]:
-                    entity = update["entity_id"]
-                    for name in STATE_FIELDS:
-                        if name in update:
-                            known[entity][name] = observation(update[name], observed_at)
-            elif row["event"] == "LevelUp":
-                known[fields["entity_id"]]["level"] = observation(fields["level"], observed_at)
+            if row["event"] in {"StatUpdate", "LevelUp"}:
+                apply_state(known, row)
             elif row["event"] == "MinionDeath" and fields["killer_id"] in champions:
                 entity = fields["killer_id"]
                 last_hits[entity] += 1
@@ -116,15 +124,82 @@ def build_report(events: list[dict], duration: float, player: int | None, oppone
     }
 
 
+def footer_by_entity(terminal: dict, participants: tuple[dict, ...]) -> dict:
+    by_stats = defaultdict(list)
+    for participant in participants:
+        try:
+            stats = tuple(int(participant[field]) for field in ("GOLD_EARNED", "EXP", "LEVEL"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        by_stats[stats].append(participant)
+
+    matches = defaultdict(list)
+    for entity, state in terminal.items():
+        fields = ("total_gold", "xp", "level")
+        if all(field in state for field in fields):
+            stats = tuple(math.trunc(state[field]["value"]) for field in fields)
+            matches[stats].append(entity)
+    return {
+        entities[0]: by_stats[stats][0]
+        for stats, entities in matches.items()
+        if len(entities) == 1 and len(by_stats.get(stats, ())) == 1
+    }
+
+
+def build_cast_report(events: list[dict], entities: list[int], participants: tuple[dict, ...]) -> list[dict]:
+    terminal = defaultdict(dict)
+    casts = defaultdict(list)
+    other_slots = Counter()
+    available = False
+    for row in events:
+        if row["event"] in {"StatUpdate", "LevelUp"}:
+            apply_state(terminal, row)
+        elif row["event"] == "SpellCast":
+            available = True
+            fields = row["fields"]
+            caster = fields["caster"]
+            slot = fields["code_92"]
+            if 0 <= slot < 4:
+                casts[caster, slot].append({
+                    "t": row["t"], "spell_hash": fields["spell_hash"], "cast_seq": fields["cast_seq"],
+                })
+            else:
+                other_slots[caster] += 1
+    footers = footer_by_entity(terminal, participants)
+    reports = []
+    for entity in entities:
+        slots = {}
+        for index, slot in enumerate("QWER"):
+            rows = casts[entity, index] if available else None
+            counter = footers.get(entity, {}).get(f"SPELL{index + 1}_CAST")
+            footer_count = int(counter) if isinstance(counter, (int, str)) and str(counter).isdigit() else None
+            slots[slot] = {
+                "observed_count": len(rows) if rows is not None else None,
+                "footer_count": footer_count,
+                "packet_count_agrees": len(rows) == footer_count
+                if rows is not None and footer_count is not None else None,
+                "observations": rows,
+            }
+        reports.append({
+            "entity_id": entity,
+            "slots": slots,
+            "other_slot_rows": other_slots[entity] if available else None,
+        })
+    return reports
+
+
 def run(args) -> int:
     try:
         replay = Replay.open(args.replay)
         with args.events.open(encoding="utf-8") as source:
-            events = load_events(source, replay)
+            events = load_events(source, replay, include_casts=args.casts)
         duration = replay.metadata["gameLength"] / 1000
         if not math.isfinite(duration) or duration < 0:
             raise ValueError("invalid match duration")
         report = build_report(events, duration, args.player_id, args.opponent_id)
+        if args.casts:
+            entities = [row["entity_id"] for row in report["snapshots"][0]["players"]]
+            report["casts"] = build_cast_report(events, entities, replay.participants)
         result = {"match": replay.path.stem, "version": replay.version, **report}
         print(json.dumps(result, indent=2, allow_nan=False))
     except (OSError, ValueError, KeyError, TypeError) as exc:

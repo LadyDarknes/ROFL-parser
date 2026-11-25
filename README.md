@@ -23,6 +23,7 @@ rofl-parser inspect match.rofl --stats
 rofl-parser inspect match.rofl --stream 1 --packet-id 0x0212 --jsonl packets.jsonl --raw-hex
 rofl-parser combat match.rofl --binary client-snapshot.exe --output combat.jsonl
 rofl-parser timeline match.rofl --events combat.jsonl
+rofl-parser timeline match.rofl --events combat.jsonl --casts
 ```
 
 `inspect` writes a JSON packet inventory to stdout. `--stats` also includes the participant records from the replay footer. `--stream 1` selects the match event stream. Leave that filter out to inspect keyframes and startup blocks as well.
@@ -30,6 +31,8 @@ rofl-parser timeline match.rofl --events combat.jsonl
 `combat` writes one JSON object per event. It checks the exact replay build, protocol header and SHA-256 of the local PE snapshot. The snapshot is an input you supply. The decoder runs the relevant packet readers in an offline emulator.
 
 `timeline` samples recorded gold, XP, HP, primary resource and level by minute. Select two entity IDs with `--player-id` and `--opponent-id` for gold and XP differences at 5, 10 and 15 minutes. The report keeps the timestamp of each underlying observation. Observed lane minion killing blows have their own counter while CS credit is unresolved.
+
+`--casts` adds observed Q/W/E/R packet timestamps and spell hashes for each selected champion. It includes the match footer's final cast counts when the participant can be identified. Use a full combat export to compare the observed history with the footer.
 
 ## Verified support
 

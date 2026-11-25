@@ -52,6 +52,10 @@ In the two 16.23 samples, the last observed total gold and XP agree with the foo
 
 The item acquisition packet exports the item ID, slot, price and remaining gold. A positive price gives the event the `ItemPurchase` label. Use the acquisition rows to follow item additions. Sale, undo, and component removal still require their own event mappings.
 
+### Ability cast observations
+
+`timeline --casts` groups a champion's `SpellCast` rows into Q, W, E and R using slot codes 0–3. It keeps the replay timestamp, spell hash and cast sequence for every row, including repeated sequence values. Some abilities emit multiple rows or show fewer rows than their final cast counters, so the report carries both counts when available. Footer rows are joined by a unique match on final earned gold, XP and level. Missing or ambiguous footer matches leave the final counts `null`. In the two validation replays, all 20 champions joined to a footer row and packet counts agreed for 57 of the 80 champion-slot combinations.
+
 ## Adding a build
 
 1. Verify raw framing on multiple replays from the build. Track counts by stream and keep keyframes out of event totals.

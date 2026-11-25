@@ -36,7 +36,7 @@ The 16.23 profile exports lane minion deaths and killer IDs, `StatUpdate` for re
 
 | Output | Inputs and method |
 | --- | --- |
-| **Q/W/E/R cast timestamps and total casts** | Join slot, spell hash, cast sequence, and champion form. Define how each ability handles recasts and toggles. Report counts from observed records alongside the footer counters where available. |
+| **Q/W/E/R cast timestamps and total casts** | `timeline --casts` groups observed timestamps and reports footer counts where the participant join is unique. Validate remaining recasts, toggles and form-specific sequences so a packet can be attributed to one player action. |
 | **Ability hit, miss, and block rates** | Join casts to missiles, confirmed contacts, damage, buffs, and block signals. Assign `hit`, `miss`, `blocked`, or `unknown` per eligible cast. Display outcome rates over resolved casts and the unresolved share over all eligible casts. |
 | **Champion/minion hit split, hit rate by distance, average damage, and targets per cast** | Resolve target types from the entity timeline. Use observed cast origin and contact position for distance buckets. Sum damage per cast, report average damage over eligible casts with known outcomes, and count distinct targets. Include the number of casts in each bucket. |
 | **Cooldown history, time spent ready, and mana at cast time** | Apply cooldown updates, resets, charges, and resource updates in order. Measure ready time until the next use, capped by the observed window. Read mana from the last applicable resource state before the cast. |
