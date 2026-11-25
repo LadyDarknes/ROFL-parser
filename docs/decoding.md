@@ -18,10 +18,13 @@ The [profile module](../src/rofl_parser/profiles/v16_23_841_8428.py) maps packet
 | `0x0167` | `BasicAttackMinion` | Attacker, target, position |
 | `0x0212` | `DamageEvent` | Source, target, amount, effect hash |
 | `0x0234` | `SpellCast` | Caster, spell hash, cast sequence, timing, slot codes |
+| `0x024F` | `CooldownUpdate` | Unit, spell slot, remaining cooldown and display duration |
 | `0x0277` | `BuffAdd2` | Caster, target, hash, slot |
 | `0x027F` | `MissileTrajectory` | Caster, missile ID, cast sequence, positions |
+| `0x030F` | `MinionCreditIncrement` | Unit and +1 credit to the lane minion counter |
 | `0x0346` | `BuffRemove2` | Target, hash, slot |
 | `0x0348` | `ItemAcquired` / `ItemPurchase` | Unit, item, slot, price paid, gold after acquisition |
+| `0x0380` | `BuffStackUpdate` | Target, caster, slot, stack count and timing |
 | `0x03E0` | `BasicAttack` | Attacker, target, position |
 | `0x03F3` | `LevelUp` | Unit, resulting level, update type code |
 | `0x04AD` | `UnitDeath` / `MinionDeath` | Victim ID, killer ID, position when available |
@@ -44,9 +47,11 @@ On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,4
 
 The two validation replays contained 4,327 death records, including 3,190 joined to lane minion spawns. Each of the 3,190 killer IDs matched the source of the final decoded damage to that minion in the same replay tick. The end-of-match CS comparison still had gaps. This event provides the killing unit, and player CS credit is tracked separately. [Historical packet family](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/npc_die.rs)
 
+The client handler for `0x030F` adds one to the resolved player's lane minion counter. The packet occurred 26 times across the two replays. Both lane and neutral CS totals are available in the footer. Exact minute CS remains `null` because neither event stream provides complete scoring.
+
 ### Player state and economy
 
-The replication buffer groups field masks and length-prefixed records by entity. A full champion record identifies an entity for subsequent stat updates. The exporter reports decoded champion fields in `updates` and retains an unresolved-record count. The structure and the field order for earlier builds are documented by [rofl-parser's replication analysis](https://github.com/shyunku-libraries/rofl-parser/blob/main/patches/16.15/replication.json).
+The replication buffer groups field masks and length-prefixed records by entity. A full champion record identifies an entity for subsequent stat updates. The exporter reports decoded champion fields in `updates` and retains an unresolved-record count. The structure and the field order for earlier builds are documented by [rofl-parser's replication analysis](https://github.com/shyunku-libraries/rofl-parser#champion-state-replication).
 
 In the two 16.23 samples, the last observed total gold and XP agree with the footer after integer truncation for all 20 players. The last observed levels agree as integers. The minute report keeps each field's last observed timestamp. Primary resource represents the champion's resource bar, which can contain mana, energy or another resource. `cs` remains `null`. Observed lane killing blows are reported separately.
 
@@ -55,6 +60,14 @@ The item acquisition packet exports the item ID, slot, price and remaining gold.
 ### Ability cast observations
 
 `timeline --casts` groups a champion's `SpellCast` rows into Q, W, E and R using slot codes 0–3. It keeps the replay timestamp, spell hash and cast sequence for every row, including repeated sequence values. Some abilities emit multiple rows or show fewer rows than their final cast counters, so the report carries both counts when available. Footer rows are joined by a unique match on final earned gold, XP and level. Missing or ambiguous footer matches leave the final counts `null`. In the two validation replays, all 20 champions joined to a footer row and packet counts agreed for 57 of the 80 champion-slot combinations.
+
+Each cast includes the latest observed primary resource in replay order and its observation time. The reported resource can precede the cast by more than one replay tick. The raw `mana_cost_candidate` remains available for comparison.
+
+### Cooldowns and buff stacks
+
+The client cooldown handler selects the slot at decoded object offset `+0x18` and adds the duration at `+0x14` to the current game clock. The float at `+0x20` supplies a display duration. `timeline --cooldowns` reports a ready time projected from each packet. Later updates can move that time. The two validation matches included 4,263 cooldown updates.
+
+`BuffStackUpdate` links to the active application by target, slot and caster. A missing application leaves `buff_hash` as `null`. The join resolved 16,629 of 17,334 stack updates across the two replays. `timeline --buffs` also reports the Rising Spell Force stack history when it sees the `EzrealPassiveStacks` hash. Passive uptime is a lower bound based on closed application/removal intervals. The report counts unresolved transitions and leaves maximum-stack time `null` if no stack update is present. [Ezreal game data](https://raw.communitydragon.org/latest/game/data/characters/ezreal/ezreal.bin.json)
 
 ## Adding a build
 

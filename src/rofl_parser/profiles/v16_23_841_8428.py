@@ -16,6 +16,11 @@ STAT_UPDATE_ID = 0x0135
 LEVEL_UP_ID = 0x03F3
 CONTEXT_NOTIFICATION_ID = 0x002D
 ITEM_ACQUISITION_ID = 0x0348
+COOLDOWN_UPDATE_ID = 0x024F
+MINION_CREDIT_ID = 0x030F
+BUFF_ADD_ID = 0x0277
+BUFF_REMOVE_ID = 0x0346
+BUFF_STACK_ID = 0x0380
 PACKETS = {
     CONTEXT_NOTIFICATION_ID: ("ContextualNotification", 0x198AFD0, 0xE01EC0),
     0x0060: ("WaypointGroup", 0x19894B0, 0xE31D90),
@@ -25,10 +30,13 @@ PACKETS = {
     0x0167: ("BasicAttackPosMinion", 0x198CD60, 0xEA12C0),
     0x0212: ("DamageEvent", 0x1986078, 0xD26E90),
     0x0234: ("SpellCast", 0x198CDC0, 0xEB8130),
-    0x0277: ("BuffAdd2", 0x198C770, 0xEB13D0),
+    COOLDOWN_UPDATE_ID: ("SetCooldown", 0x19867E0, 0xCF6DF0),
+    BUFF_ADD_ID: ("BuffAdd2", 0x198C770, 0xEB13D0),
     0x027F: ("MissileReplication", 0x198D258, 0xEAC290),
-    0x0346: ("BuffRemove2", 0x198C880, 0xEB45B0),
+    MINION_CREDIT_ID: ("IncrementMinionKills", 0x198A268, 0xDCF8A0),
+    BUFF_REMOVE_ID: ("BuffRemove2", 0x198C880, 0xEB45B0),
     ITEM_ACQUISITION_ID: ("BuyItemAnswer", 0x19899C8, 0xDC9680),
+    BUFF_STACK_ID: ("BuffUpdateCount", 0x198C908, 0xEB68E0),
     0x03E0: ("BasicAttackPos", 0x198CD00, 0xEA1480),
     LEVEL_UP_ID: ("NpcLevelUp", 0x1985D28, 0xCFA4E0),
     UNIT_DEATH_ID: ("NpcDeathMapView", 0x1985EA0, 0xCF8B30),
@@ -42,15 +50,19 @@ EVENTS = {
     0x0167: "BasicAttackMinion",
     0x0212: "DamageEvent",
     0x0234: "SpellCast",
-    0x0277: "BuffAdd2",
+    COOLDOWN_UPDATE_ID: "CooldownUpdate",
+    BUFF_ADD_ID: "BuffAdd2",
     0x027F: "MissileTrajectory",
-    0x0346: "BuffRemove2",
+    MINION_CREDIT_ID: "MinionCreditIncrement",
+    BUFF_REMOVE_ID: "BuffRemove2",
     ITEM_ACQUISITION_ID: "ItemAcquired",
+    BUFF_STACK_ID: "BuffStackUpdate",
     0x03E0: "BasicAttack",
     LEVEL_UP_ID: "LevelUp",
     UNIT_DEATH_ID: "UnitDeath",
 }
 EZREAL_W_MARK_HASH = 0x00931FC8
+EZREAL_PASSIVE_HASH = 0x073842B3
 RECALL_HASH = 0x078B982C
 RECALL_NOTIFICATIONS = {
     "RecallLeadIn": "RecallStarted",
@@ -116,6 +128,21 @@ def decode_fields(
             "slot": uint(0x24),
             "price_paid": real(0x88),
             "gold_after": real(0x10),
+        }
+
+    if packet_id == COOLDOWN_UPDATE_ID:
+        return {
+            "entity_id": uint(0x0C), "slot": data[0x18],
+            "remaining_seconds": real(0x14), "display_duration_seconds": real(0x20),
+        }
+
+    if packet_id == MINION_CREDIT_ID:
+        return {"entity_id": uint(0x10), "delta": 1}
+
+    if packet_id == BUFF_STACK_ID:
+        return {
+            "target": uint(0x0C), "caster": uint(0x1C), "slot": data[0x11],
+            "stacks": data[0x10], "duration_seconds": real(0x14), "elapsed_seconds": real(0x18),
         }
 
     if packet_id == 0x0060:
@@ -185,7 +212,7 @@ def decode_fields(
             "spell_flags_8c": uint(0x8C),
             "time_138": real(0x138),
         }
-    if packet_id == 0x0277:
+    if packet_id == BUFF_ADD_ID:
         buff = {
             "target": uint(0x0C),
             "buff_hash": uint(0x18),
@@ -196,7 +223,7 @@ def decode_fields(
         if buff["buff_hash"] == EZREAL_W_MARK_HASH:
             buff["duration_seconds"] = buff.pop("duration_candidate")
         return buff
-    if packet_id == 0x0346:
+    if packet_id == BUFF_REMOVE_ID:
         return {"target": uint(0x0C), "buff_hash": uint(0x10), "slot": data[0x18]}
     if packet_id == 0x027F:
         return {
@@ -231,11 +258,11 @@ def event_name(packet_id: int, fields: dict) -> str:
         return RECALL_NOTIFICATIONS.get(fields["name"], "ContextualNotification")
     if packet_id == ITEM_ACQUISITION_ID and fields["price_paid"] > 0:
         return "ItemPurchase"
-    if packet_id == 0x0277:
+    if packet_id == BUFF_ADD_ID:
         if fields["buff_hash"] == EZREAL_W_MARK_HASH:
             return "EzrealWMarkApplied"
         if fields["buff_hash"] == RECALL_HASH:
             return "RecallBuffApplied"
-    if packet_id == 0x0346 and fields["buff_hash"] == RECALL_HASH:
+    if packet_id == BUFF_REMOVE_ID and fields["buff_hash"] == RECALL_HASH:
         return "RecallBuffRemoved"
     return EVENTS[packet_id]

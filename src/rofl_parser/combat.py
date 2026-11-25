@@ -54,6 +54,9 @@ except ImportError:
     raise ImportError("install the combat extra with python -m pip install .[combat]") from None
 
 from .profiles.v16_23_841_8428 import (
+    BUFF_ADD_ID,
+    BUFF_REMOVE_ID,
+    BUFF_STACK_ID,
     ALLOCATOR_RVA,
     BINARY_SHA256,
     FACTORY_RVA,
@@ -320,8 +323,11 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
     selected = set(args.packet_id or PACKETS)
     read_ids = selected.copy()
     lane_minions: set[int] = set()
+    active_buffs: dict[tuple[int, int], dict] = {}
     if UNIT_DEATH_ID in selected:
         read_ids.update((LANE_MINION_SPAWN_ID, OBJECT_SPAWN_ID))
+    if BUFF_STACK_ID in selected:
+        read_ids.update((BUFF_ADD_ID, BUFF_REMOVE_ID))
     for packet in replay.iter_packets(
         streams={1}, packet_ids=read_ids, include_payload=True
     ):
@@ -342,6 +348,19 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
             elif packet_id == UNIT_DEATH_ID and fields["entity_id"] in lane_minions:
                 event = "MinionDeath"
                 lane_minions.remove(fields["entity_id"])
+        if BUFF_STACK_ID in selected and packet_id in {BUFF_ADD_ID, BUFF_REMOVE_ID, BUFF_STACK_ID}:
+            key = fields["target"], fields["slot"]
+            if packet_id == BUFF_ADD_ID:
+                active_buffs[key] = fields
+            elif packet_id == BUFF_REMOVE_ID:
+                active = active_buffs.get(key)
+                if active is not None and active["buff_hash"] == fields["buff_hash"]:
+                    del active_buffs[key]
+            else:
+                active = active_buffs.get(key)
+                fields["buff_hash"] = (
+                    active["buff_hash"] if active is not None and fields["caster"] == active["caster"] else None
+                )
         if packet_id not in selected:
             continue
         row = {

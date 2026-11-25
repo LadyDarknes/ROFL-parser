@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--player-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
     report.add_argument("--opponent-id", type=lambda value: transport.number(value, 0xFFFFFFFF))
     report.add_argument("--casts", action="store_true", help="include observed Q/W/E/R cast rows and footer counters")
+    report.add_argument("--cooldowns", action="store_true", help="include cooldown updates by spell slot")
+    report.add_argument("--buffs", action="store_true", help="include buff applications, removals and stack updates")
     report.set_defaults(run=timeline.run)
 
     args = parser.parse_args(argv)
