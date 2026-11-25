@@ -1,11 +1,17 @@
 """Verified packet identities and decoded object layouts for build 16.23.841.8428."""
 
 import struct
+from collections.abc import Callable
+
+from .waypoints import read_paths
 
 VERSION = "16.23.841.8428"
 PROTOCOL_HEADER = "8bbfcd5af2bc92db"
 BINARY_SHA256 = "64a3d49aa9a3dbf69c6c2bda8e7abd42f33a0708aa655892b818476b609a161e"
 PACKETS = {
+    0x0060: ("WaypointGroup", 0x19894B0, 0xE31D90),
+    0x00BB: ("ObjectSpawn", 0x198A088, 0xE2DA70),
+    0x00BD: ("LaneMinionSpawn", 0x198FC50, 0xE9F7B0),
     0x0167: ("BasicAttackPosMinion", 0x198CD60, 0xEA12C0),
     0x0212: ("DamageEvent", 0x1986078, 0xD26E90),
     0x0234: ("SpellCast", 0x198CDC0, 0xEB8130),
@@ -15,6 +21,9 @@ PACKETS = {
     0x03E0: ("BasicAttackPos", 0x198CD00, 0xEA1480),
 }
 EVENTS = {
+    0x0060: "WaypointGroup",
+    0x00BB: "EntityCreate",
+    0x00BD: "EntityCreate",
     0x0167: "BasicAttackMinion",
     0x0212: "DamageEvent",
     0x0234: "SpellCast",
@@ -29,14 +38,26 @@ FACTORY_RVA = 0xCD99B0
 ALLOCATOR_RVA = 0xF79190
 FREE_RVAS = (0xF791C0, 0xF912D0)
 SENDER_TABLE_RVA = 0x19A7640
+MEMSET_RVA = 0x1870050
+TEAM_REGISTRY_RVA = 0x1CFA918
+TEAM_REGISTRY_COUNT = 4
 
 U32 = struct.Struct("<I")
 U16 = struct.Struct("<H")
 F32 = struct.Struct("<f")
 VEC3 = struct.Struct("<fff")
+POINTER = struct.Struct("<Q")
+STRING = struct.Struct("<QI")
 
 
-def decode_fields(packet_id: int, data: bytearray) -> dict:
+def read_string(data: bytearray, offset: int, read_heap: Callable[[int, int], bytes]) -> str:
+    pointer, size = STRING.unpack_from(data, offset)
+    return read_heap(pointer, size).decode("utf-8") if size else ""
+
+
+def decode_fields(
+    packet_id: int, data: bytearray, read_heap: Callable[[int, int], bytes] | None = None
+) -> dict:
     def uint(offset: int) -> int:
         return U32.unpack_from(data, offset)[0]
 
@@ -48,6 +69,34 @@ def decode_fields(packet_id: int, data: bytearray) -> dict:
 
     def xyz(offset: int) -> tuple[float, float, float]:
         return VEC3.unpack_from(data, offset)
+
+    if packet_id in {0x0060, 0x00BB} and read_heap is None:
+        raise ValueError("packet reader requires access to its decoded heap buffer")
+
+    if packet_id == 0x0060:
+        size = uint(0x20)
+        pointer, = POINTER.unpack_from(data, 0x18)
+        buffer = read_heap(pointer, size) if size else b""
+        return {"sequence": uint(0x10), "paths": read_paths(buffer, word(0x14))}
+
+    if packet_id == 0x00BB:
+        return {
+            "kind": "object",
+            "entity_id": uint(0x0C),
+            "owner_id": uint(0x14) or None,
+            "position": xyz(0x1C),
+            "name": read_string(data, 0x38, read_heap),
+            "skin": read_string(data, 0x68, read_heap),
+            "spawn_time": real(0x8C),
+        }
+
+    if packet_id == 0x00BD:
+        return {
+            "kind": "lane_minion",
+            "entity_id": uint(0x0C),
+            "spawner_id": uint(0x1C),
+            "spawn_time": real(0x24),
+        }
 
     if packet_id == 0x0212:
         return {

@@ -5,9 +5,68 @@ import unittest
 from pathlib import Path
 
 from rofl_parser.profiles.v16_23_841_8428 import RECALL_HASH, decode_fields, event_name
+from rofl_parser.profiles.waypoints import read_paths
 
 
 class CombatProfileTests(unittest.TestCase):
+    def test_waypoint_group_decodes_signed_deltas_and_multiple_units(self):
+        first = struct.pack("<HIf", 0x0205, 0x40000051, 350.0)
+        first += b"\x00\x01" + struct.pack("<hhbh", -100, 100, -5, 160)
+        second = struct.pack("<HIfhh", 2, 0x40000052, 0.0, 0, -50)
+        data = first + second
+        body = bytearray(0x28)
+        struct.pack_into("<IIQI", body, 0x10, 941, 2, 0x500, len(data))
+
+        def read_heap(address, size):
+            self.assertEqual((address, size), (0x500, len(data)))
+            return data
+
+        self.assertEqual(decode_fields(0x0060, body, read_heap), {
+            "sequence": 941,
+            "paths": [
+                {"unit": 0x40000051, "speed": 350.0, "points": [[7158, 7612], [7148, 7732]]},
+                {"unit": 0x40000052, "speed": 0.0, "points": [[7358, 7312]]},
+            ],
+        })
+
+    def test_waypoint_buffer_must_have_exactly_the_advertised_entries(self):
+        entry = struct.pack("<HIfhh", 2, 0x40000051, 350.0, 0, 0)
+        with self.assertRaisesRegex(ValueError, "truncated waypoint"):
+            read_paths(entry[:-1], 1)
+        with self.assertRaisesRegex(ValueError, "do not fill"):
+            read_paths(entry + b"\x00", 1)
+
+    def test_object_and_lane_spawns_report_distinct_entity_relationships(self):
+        obj = bytearray(0x98)
+        struct.pack_into("<II", obj, 0x0C, 0x40000071, 1)
+        struct.pack_into("<I", obj, 0x14, 0x40000051)
+        struct.pack_into("<fff", obj, 0x1C, 1000.0, -15.0, 3500.0)
+        struct.pack_into("<QI", obj, 0x38, 0x120, 13)
+        struct.pack_into("<QI", obj, 0x68, 0x150, 9)
+        struct.pack_into("<f", obj, 0x8C, 32.0)
+        strings = {0x120: b"YellowTrinket", 0x150: b"SightWard"}
+        fields = decode_fields(0x00BB, obj, lambda address, size: strings[address][:size])
+        self.assertEqual(fields, {
+            "kind": "object",
+            "entity_id": 0x40000071,
+            "owner_id": 0x40000051,
+            "position": (1000.0, -15.0, 3500.0),
+            "name": "YellowTrinket",
+            "skin": "SightWard",
+            "spawn_time": 32.0,
+        })
+        lane_minion = bytearray(0x2C)
+        struct.pack_into("<I", lane_minion, 0x0C, 0x400002E6)
+        struct.pack_into("<I", lane_minion, 0x1C, 0x4000012C)
+        struct.pack_into("<f", lane_minion, 0x24, 30.0)
+        self.assertEqual(decode_fields(0x00BD, lane_minion), {
+            "kind": "lane_minion",
+            "entity_id": 0x400002E6,
+            "spawner_id": 0x4000012C,
+            "spawn_time": 30.0,
+        })
+        self.assertEqual(event_name(0x00BB, fields), "EntityCreate")
+
     def test_damage_object_keeps_source_and_target_distinct(self):
         body = bytearray(0x30)
         struct.pack_into("<f", body, 0x10, 18.5)

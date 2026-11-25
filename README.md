@@ -33,11 +33,13 @@ rofl-parser combat match.rofl --binary client-snapshot.exe --output combat.jsonl
 | Replay build | Container and raw packets | Combat events |
 | --- | --- | --- |
 | `16.19.823.0722` | Verified on one replay | Raw export |
-| `16.23.841.8428` | Verified on two replays | Spell casts, damage, basic attacks, missiles, buff applications and removals |
+| `16.23.841.8428` | Verified on two replays | Spell casts, damage, basic attacks, missiles, buffs, waypoint groups, object and lane minion spawns |
 
 Spell casts, damage, attacks, missiles and buffs use shared packet types. Known buff effects can also receive [specific labels](docs/decoding.md#the-1623-combat-profile).
 
-Calculating ability hit rates is a separate analysis step. Some abilities require their own rules to link casts with damage, missiles or applied effects. Recall completion, stat histories, movement routes and item timelines are open work. Cooldown, resource cost and cast positions retain candidate labels where their meaning is still being checked.
+Waypoint groups contain unit IDs, movement speeds and X/Z route points. Spawn events identify lane minions, wards, plants and other objects for joins against those paths and combat events.
+
+Calculating ability hit rates is a separate analysis step. Some abilities require their own rules to link casts with damage, missiles or applied effects. Recall completion, stat histories and item timelines are open work. Cooldown, resource cost and cast positions retain candidate labels where their meaning is still being checked.
 
 See [packet profiles and output](docs/decoding.md) for field provenance and build validation.
 

@@ -1,7 +1,6 @@
-"""Decode seven event packet classes from matching 16.23.841.8428 ROFL2 files.
+"""Decode supported event packet classes from matching 16.23.841.8428 ROFL2 files.
 
-Requires the optional combat dependencies and the matching local PE snapshot.
-Use an existing local PE snapshot with the SHA-256 shown in this file.
+Requires the optional combat dependencies and the local PE snapshot identified by the build profile.
 The PE is read as data. Only the packet factory and deserializers run, in
 Unicorn, with no game process, network, or native library calls.
 
@@ -59,9 +58,12 @@ from .profiles.v16_23_841_8428 import (
     BINARY_SHA256,
     FACTORY_RVA,
     FREE_RVAS,
+    MEMSET_RVA,
     PACKETS,
     PROTOCOL_HEADER,
     SENDER_TABLE_RVA,
+    TEAM_REGISTRY_COUNT,
+    TEAM_REGISTRY_RVA,
     VERSION,
     decode_fields,
     event_name,
@@ -112,12 +114,16 @@ class Decoder:
         self.machine.mem_write(STUB, b"\x31\xc0\xc3")
         self._set_import_stubs(pe)
         self._set_thread_environment(pe)
+        self._set_team_registry()
 
         for rva in FREE_RVAS:
             self.machine.mem_write(self.base + rva, b"\xc3")
         allocator = self.base + ALLOCATOR_RVA
         self.machine.mem_write(allocator, b"\xc3")
         self.machine.hook_add(UC_HOOK_CODE, self._allocate_hook, begin=allocator, end=allocator)
+        memset = self.base + MEMSET_RVA
+        self.machine.mem_write(memset, b"\xc3")
+        self.machine.hook_add(UC_HOOK_CODE, self._memset_hook, begin=memset, end=memset)
         dispatch_slot = pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct.GuardCFDispatchFunctionPointer
         dispatch = self.read_ptr(dispatch_slot)
         self.machine.hook_add(UC_HOOK_CODE, self._dispatch_hook, begin=dispatch, end=dispatch)
@@ -163,8 +169,26 @@ class Decoder:
         self.machine.mem_write(address, bytes(size))
         return address
 
+    def _set_team_registry(self) -> None:
+        # Enum readers use the initialized session table's readiness flag and team count.
+        registry = TEB + 0x3000
+        self.machine.mem_write(self.base + TEAM_REGISTRY_RVA, PTR.pack(registry))
+        self.machine.mem_write(registry + 0x08, bytes([TEAM_REGISTRY_COUNT]))
+        self.machine.mem_write(registry + 0x70, b"\x01")
+
     def _allocate_hook(self, machine: Uc, address: int, size: int, data: object) -> None:
         machine.reg_write(UC_X86_REG_RAX, self._allocate(machine.reg_read(UC_X86_REG_RCX)))
+
+    def _memset_hook(self, machine: Uc, address: int, size: int, data: object) -> None:
+        # Replace the AVX implementation with the same byte writes inside the emulator.
+        destination = machine.reg_read(UC_X86_REG_RCX)
+        value = machine.reg_read(UC_X86_REG_RDX) & 0xFF
+        length = machine.reg_read(UC_X86_REG_R8)
+        if length > HEAP_SIZE:
+            raise DecodeError("emulated memory fill exceeds the work area")
+        if length:
+            machine.mem_write(destination, bytes([value]) * length)
+        machine.reg_write(UC_X86_REG_RAX, destination)
 
     def _dispatch_hook(self, machine: Uc, address: int, size: int, data: object) -> None:
         target = machine.reg_read(UC_X86_REG_RAX)
@@ -216,6 +240,11 @@ class Decoder:
     def read_ptr(self, address: int) -> int:
         return PTR.unpack(self.machine.mem_read(address, PTR.size))[0]
 
+    def _read_heap(self, address: int, size: int) -> bytes:
+        if size < 0 or not HEAP <= address <= self.cursor - size:
+            raise DecodeError("decoded field points outside the packet heap")
+        return bytes(self.machine.mem_read(address, size))
+
     def _call(self, address: int, *arguments: int) -> int:
         stack = STACK + STACK_SIZE - 0x2008
         self.machine.mem_write(stack, PTR.pack(STOP))
@@ -261,7 +290,7 @@ class Decoder:
                 data[address - packet] = value
         if U32.unpack_from(data, 0x0C)[0] != sender:
             raise DecodeError("decoded sender differs from the replay block header")
-        return decode_fields(packet_id, data)
+        return decode_fields(packet_id, data, self._read_heap)
 
 
 def write_rows(args: argparse.Namespace) -> None:
@@ -288,7 +317,7 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
     ):
         try:
             fields = decoder.decode(packet.packet_id, packet.param, packet.payload)
-        except (UcError, DecodeError) as exc:
+        except (UcError, ValueError) as exc:
             raise DecodeError(
                 f"chunk {packet.chunk.chunk_id}, block 0x{packet.block_offset:x}, "
                 f"ID 0x{packet.packet_id:04x}: {exc}"

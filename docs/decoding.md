@@ -10,6 +10,9 @@ The [profile module](../src/rofl_parser/profiles/v16_23_841_8428.py) maps packet
 
 | ID | Exported event | Main fields |
 | --- | --- | --- |
+| `0x0060` | `WaypointGroup` | Sequence, unit IDs, movement speeds, X/Z points |
+| `0x00BB` | `EntityCreate` | Object ID, owner ID, position, object and skin names, spawn time |
+| `0x00BD` | `EntityCreate` | Lane minion ID, spawner ID, spawn time |
 | `0x0167` | `BasicAttackMinion` | Attacker, target, position |
 | `0x0212` | `DamageEvent` | Source, target, amount, effect hash |
 | `0x0234` | `SpellCast` | Caster, spell hash, cast sequence, timing, slot codes |
@@ -23,6 +26,12 @@ The decoder selects packets by build and packet ID across the whole match. For e
 `RecallBuffApplied` and `RecallBuffRemoved` label buff transitions for any champion. A completed or interrupted recall can be classified once a separate finish signal is verified.
 
 Event JSONL includes the replay build, match name, packet ID, timestamp and decoded fields. `chunk_file_offset` is relative to the file. `block_offset` and `payload_offset` are relative to the decompressed chunk. With `--raw`, the hex bytes begin at `payload_offset`.
+
+### Movement and spawn joins
+
+Each `WaypointGroup` contains a `paths` array. Each path has a `unit`, `speed` and `points` array. `points` represents the route update sent to the client. Join `unit` to `entity_id` from an `EntityCreate` event within the same match. Spawn coverage currently comes from two packet classes. `kind` distinguishes `object` from `lane_minion`. Objects have an `owner_id` when one is present. Lane minions have a `spawner_id`.
+
+On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,432 paths. Every one of the 3,300 recorded lane minion spawns matched a unit ID in the waypoint stream. The object spawn class contributed another 1,222 rows. The waypoint entry format is credited to [ROFL-X](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/waypoints.rs).
 
 ## Adding a build
 
