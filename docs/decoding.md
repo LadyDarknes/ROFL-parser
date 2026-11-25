@@ -14,19 +14,27 @@ The [profile module](../src/rofl_parser/profiles/v16_23_841_8428.py) maps packet
 | `0x0060` | `WaypointGroup` | Sequence, unit IDs, movement speeds, X/Z points |
 | `0x00BB` | `EntityCreate` | Object ID, owner ID, position, object and skin names, spawn time |
 | `0x00BD` | `EntityCreate` | Lane minion ID, spawner ID, spawn time |
+| `0x00D5` | `MissileRemove` | Missile ID, removal code |
+| `0x00E2` | `InventorySwap` | Unit, source and destination slots |
 | `0x0135` | `StatUpdate` | Observed champion gold, XP, health and primary resource updates |
 | `0x0167` | `BasicAttackMinion` | Attacker, target, position |
+| `0x0188` | `EntityCreate` | Neutral unit ID, instance name, unit model, position and mode variant hint |
 | `0x0212` | `DamageEvent` | Source, target, amount, effect hash |
 | `0x0234` | `SpellCast` | Caster, spell hash, cast sequence, timing, slot codes |
 | `0x024F` | `CooldownUpdate` | Unit, spell slot, remaining cooldown and display duration |
 | `0x0277` | `BuffAdd2` | Caster, target, hash, slot |
 | `0x027F` | `MissileTrajectory` | Caster, missile ID, cast sequence, positions |
+| `0x02AA` | `MissileDimensionUpdate` | Missile ID and dimension code |
+| `0x02D9` | `AttackControl` | Attacker, related entity, sequence and flags |
 | `0x030F` | `MinionCreditIncrement` | Unit and +1 credit to the lane minion counter |
+| `0x0310` | `MissileImpact` | Missile ID and impacted entity IDs |
+| `0x031D` | `InventorySlotUpdate` | Unit, slot, remaining quantity, gold and action code |
 | `0x0346` | `BuffRemove2` | Target, hash, slot |
 | `0x0348` | `ItemAcquired` / `ItemPurchase` | Unit, item, slot, price paid, gold after acquisition |
 | `0x0380` | `BuffStackUpdate` | Target, caster, slot, stack count and timing |
 | `0x03E0` | `BasicAttack` | Attacker, target, position |
 | `0x03F3` | `LevelUp` | Unit, resulting level, update type code |
+| `0x049F` | `ChampionDeath` | Victim, killer, respawn timer and position when present |
 | `0x04AD` | `UnitDeath` / `MinionDeath` | Victim ID, killer ID, position when available |
 
 The decoder selects packets by build and packet ID across the whole match. For example, every decoded `0x0234` row is a `SpellCast`, regardless of its caster. Buff rows with known hashes can get a more specific label. `EzrealWMarkApplied` is the label for the Essence Flux mark carried by a `BuffAdd2` row. Other buff applications still appear as `BuffAdd2`.
@@ -41,6 +49,8 @@ Each `WaypointGroup` contains a `paths` array. Each path has a `unit`, `speed` a
 
 On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,432 paths. Every one of the 3,300 recorded lane minion spawns matched a unit ID in the waypoint stream. The object spawn class contributed another 1,222 rows. The waypoint entry format is credited to [ROFL-X](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/waypoints.rs).
 
+Across one discovery replay and three holdouts, 4,158 of 4,159 waypoint entries recorded under the attacker in the same tick as a basic attack placed their first point within 25 units of the attack packet's target position. Only nine entries placed their first point within 25 units of the attacker. That makes the unit and route position unsafe as a general position sample. `timeline --positions` uses the origin and explicit target positions from attacks and the position from champion deaths. Gaps between samples are left open.
+
 ### Unit deaths
 
 `0x04AD` exports a death event with the replay block time in `t`, the victim in `fields.entity_id`, and the killing unit in `fields.killer_id`. An earlier live lane-minion spawn for the same entity ID gives the event the `MinionDeath` label. Other victims, including those with an unavailable spawn, use `UnitDeath`. The exporter reads the spawn context even when filtering the output to `--packet-id 0x04AD`. The position is `null` when the packet leaves it unset.
@@ -48,6 +58,8 @@ On two 16.23 replays, the decoder consumed 50,494 waypoint groups and read 189,4
 The two validation replays contained 4,327 death records, including 3,190 joined to lane minion spawns. Each of the 3,190 killer IDs matched the source of the final decoded damage to that minion in the same replay tick. The end-of-match CS comparison still had gaps. This event provides the killing unit, and player CS credit is tracked separately. [Historical packet family](https://github.com/Toastaspiring/ROFL-X/blob/main/src/packet/handlers/npc_die.rs)
 
 The client handler for `0x030F` adds one to the resolved player's lane minion counter. The packet occurred 26 times across the two replays. Both lane and neutral CS totals are available in the footer. Exact minute CS remains `null` because neither event stream provides complete scoring.
+
+The separate `0x049F` champion death packet carries the victim, killer, respawn timer and available X/Z coordinates. Its per-player death and killer totals matched the footer for all 50 players across five replays, with 311 death packets. `timeline --death-windows` includes observed events up to the death packet, last recorded HP and primary resource, and cooldowns projected from their last observed updates.
 
 ### Player state and economy
 
@@ -63,11 +75,17 @@ The item acquisition packet exports the item ID, slot, price and remaining gold.
 
 Each cast includes the latest observed primary resource in replay order and its observation time. The reported resource can precede the cast by more than one replay tick. The raw `mana_cost_candidate` remains available for comparison.
 
+For Ezreal Q, the caster, spell hash and sequence join a cast to a unique missile. `0x0310` links the missile ID to a list of impacted entities. A same-tick positive Q damage event to an impacted entity verifies a hit. Removal code 1 after about 0.6 seconds is the observed range-expiry pattern and counts as a miss in the absence of nearby Q damage. Other outcomes remain unknown. A collision without recorded damage requires additional evidence before it can count as blocked.
+
+For Ezreal W, `timeline --ezreal-w` matches positive Essence Flux damage to a unique row inside the same caster and target's mark window. A matching slot removal within 100 ms corroborates the detonation. The report preserves positive Essence Flux damage when the replay lacks a usable mark link.
+
+The attack control packet shares sequence values with recorded basic attacks. `timeline --attacks` uses the associated entity ID to link an attack record to its first projectile dimension update and projectile removal. Damage with the same source and target in the removal tick is kept as corroborating evidence. The projectile delay measures time between replay observations. Attack control flags still require separate phase validation, and cancel counts remain `null`. Similarly, inventory slot updates can reflect sales, recipe consumption or other changes. The exporter carries quantity and action code to support that distinction.
+
 ### Cooldowns and buff stacks
 
-The client cooldown handler selects the slot at decoded object offset `+0x18` and adds the duration at `+0x14` to the current game clock. The float at `+0x20` supplies a display duration. `timeline --cooldowns` reports a ready time projected from each packet. Later updates can move that time. The two validation matches included 4,263 cooldown updates.
+The client cooldown handler selects the slot at decoded object offset `+0x18` and adds the duration at `+0x14` to the current game clock. The float at `+0x20` supplies a display duration. `timeline --cooldowns` reports a ready time projected from each packet. It reports when a later update shortens or clears the projected timer by more than 150 ms, leaving the cause `null`. The two validation matches included 4,263 cooldown updates.
 
-`BuffStackUpdate` links to the active application by target, slot and caster. A missing application leaves `buff_hash` as `null`. The join resolved 16,629 of 17,334 stack updates across the two replays. `timeline --buffs` also reports the Rising Spell Force stack history when it sees the `EzrealPassiveStacks` hash. Passive uptime is a lower bound based on closed application/removal intervals. The report counts unresolved transitions and leaves maximum-stack time `null` if no stack update is present. [Ezreal game data](https://raw.communitydragon.org/latest/game/data/characters/ezreal/ezreal.bin.json)
+`BuffStackUpdate` links to the active application by target, slot and caster. A missing application leaves `buff_hash` as `null`. The join resolved 16,629 of 17,334 stack updates across the two replays. `timeline --buffs` also reports the Rising Spell Force stack history when it sees the `EzrealPassiveStacks` hash. Passive uptime is a lower bound. It includes closed lifetimes and the part of open lifetimes through their last linked stack update. The report counts unresolved transitions and leaves maximum-stack time `null` if no stack update is present. [Ezreal game data](https://raw.communitydragon.org/latest/game/data/characters/ezreal/ezreal.bin.json)
 
 ## Adding a build
 
@@ -77,3 +95,20 @@ The client cooldown handler selects the slot at decoded object offset `+0x18` an
 4. Record the validation and sample coverage before listing a new capability in the support table. Preserving raw packets gives a useful fallback while a semantic mapping is being investigated.
 
 For 16.23, opponent-champion damage reconstructed from packets agrees with the footer for 20 of 20 participants, using integer truncation of the summed amounts. The two replays also provide 131 paired Recall buff applications and removals. Future profile checks can use final inventory, champion deaths, and ability counters where the replay records them at matching scope.
+## Match report
+
+`match-report` accepts the replay and a full combat export from the same build. The versioned document keeps the existing timeline keys and adds `schema_version`, `parser_version`, `match_id`, `coverage`, and `validation`. `match_id` uses the replay filename stem. The entity catalog uses decimal entity IDs as JSON keys and names champions through footer matching. Numeric IDs remain available in the underlying events. Generate a fresh combat export to populate fields added after an older JSONL file was created.
+
+`0x00BD` carries the lane minion type at decoded offset `+0x18`. Codes 4 through 7 identify melee, caster, siege and super minions, respectively. `0x0188` provides neutral unit names and a mode variant hint. All four Ezreal validation replays expose `Swiftplay` in this packet. The field is reported as a hint from the spawn variant.
+
+Per-minion observations count killing blows and list deaths to another unit within four seconds after the selected player's positive damage. The latter describes contested minions. The exact number of missed last-hit opportunities stays `null`.
+
+## Ezreal coaching metrics
+
+Mystic Shot groups verified hits by the struck entity's type, including melee, caster and cannon minions and jungle units. In four validation replays, all 722 positive hits had a resolved target type and a recorded impact coordinate. Three distances use X/Z coordinates in game units. Aim distance goes from the missile launch point to the recorded aim point, shot distance goes to the trajectory endpoint, and hit distance goes to the impact point of the verified damage target. The distance bands are below 400, 400 to below 800, and 800 or more.
+
+The report distinguishes cast rows from missiles with no nearby cast and keeps the footer count. The four validation replays contain 899 observed casts and 1,054 footer casts for five Ezreal player-match records. Keyframe missile snapshots have separate entity handles in these samples. Snapshot-only missiles are omitted from gameplay cast totals.
+
+For Ezreal attacks, the control pattern `[1, 0, 1, 0]` with a matched attack order and no linked projectile is a cancellation candidate. A candidate stays distinct from a confirmed cancel. Projectile delay measures the recorded attack-to-projectile interval. Full windup and effective attacks per second remain unresolved.
+
+Death windows report a separate cooldown projection for Ezreal E and for each summoner slot. A later cast invalidates an older cooldown observation. The report includes the last Ezreal mana observation and retains buff records that lack an observed removal. Crowd-control state and full cast availability remain `null` without additional evidence.

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+from functools import cached_property
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -62,7 +63,10 @@ from .profiles.v16_23_841_8428 import (
     FACTORY_RVA,
     FREE_RVAS,
     LANE_MINION_SPAWN_ID,
+    IMPACT_POSITION_TABLE_RVA,
     MEMSET_RVA,
+    MISSILE_IMPACT_ID,
+    NEUTRAL_SPAWN_ID,
     OBJECT_SPAWN_ID,
     PACKETS,
     PROTOCOL_HEADER,
@@ -73,6 +77,7 @@ from .profiles.v16_23_841_8428 import (
     VERSION,
     decode_fields,
     event_name,
+    rotate_byte,
 )
 from .transport import Replay
 
@@ -91,6 +96,11 @@ class DecodeError(ValueError):
 
 
 class Decoder:
+    @cached_property
+    def impact_position_bytes(self) -> bytes:
+        table = self.machine.mem_read(self.base + IMPACT_POSITION_TABLE_RVA, 256)
+        return bytes(rotate_byte(~value & 0xFF, 5) for value in table)
+
     def __init__(self, binary_path: Path):
         raw = binary_path.read_bytes()
         if sha256(raw).hexdigest() != BINARY_SHA256:
@@ -297,6 +307,9 @@ class Decoder:
                 data[address - packet] = value
         if U32.unpack_from(data, 0x0C)[0] != sender:
             raise DecodeError("decoded sender differs from the replay block header")
+        if packet_id == MISSILE_IMPACT_ID:
+            return decode_fields(packet_id, data, self._read_heap, self.champions,
+                                 impact_position_bytes=self.impact_position_bytes)
         return decode_fields(packet_id, data, self._read_heap, self.champions)
 
 
@@ -325,7 +338,7 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
     lane_minions: set[int] = set()
     active_buffs: dict[tuple[int, int], dict] = {}
     if UNIT_DEATH_ID in selected:
-        read_ids.update((LANE_MINION_SPAWN_ID, OBJECT_SPAWN_ID))
+        read_ids.update((LANE_MINION_SPAWN_ID, OBJECT_SPAWN_ID, NEUTRAL_SPAWN_ID))
     if BUFF_STACK_ID in selected:
         read_ids.update((BUFF_ADD_ID, BUFF_REMOVE_ID))
     for packet in replay.iter_packets(
@@ -343,7 +356,7 @@ def export_rows(replay: Replay, decoder: Decoder, args: argparse.Namespace, outp
         if UNIT_DEATH_ID in selected:
             if packet_id == LANE_MINION_SPAWN_ID:
                 lane_minions.add(fields["entity_id"])
-            elif packet_id == OBJECT_SPAWN_ID:
+            elif packet_id in {OBJECT_SPAWN_ID, NEUTRAL_SPAWN_ID}:
                 lane_minions.discard(fields["entity_id"])
             elif packet_id == UNIT_DEATH_ID and fields["entity_id"] in lane_minions:
                 event = "MinionDeath"

@@ -31,13 +31,17 @@ class PlayerStateTests(unittest.TestCase):
         self.assertEqual(champions, {entity})
         self.assertEqual(first["updates"], [{
             "entity_id": entity, "current_gold": 500.0, "total_gold": 1400.0, "hp": 800.0,
-            "max_hp": 900.0, "xp": 660.0, "primary_resource": 300.0, "max_primary_resource": 400.0,
+            "max_hp": 900.0, "all_shield": 0.0, "xp": 660.0, "primary_resource": 300.0, "max_primary_resource": 400.0,
         }])
         delta = struct.pack("<BIIB", 0x20, entity, 1, 1) + b"\xff"
         self.assertEqual(read_champion_updates(delta, 1, champions)["updates"], [{
             "entity_id": entity, "hp": 0.0,
         }])
         self.assertEqual(read_champion_updates(delta[:-1], 1, champions)["unresolved_records"], 1)
+        shield = struct.pack("<BIIBf", 0x20, entity, 1 << 3, 4, 575.0)
+        self.assertEqual(read_champion_updates(shield, 1, champions)["updates"], [{
+            "entity_id": entity, "all_shield": 575.0,
+        }])
 
     def test_level_recall_and_item_labels_use_their_decoded_fields(self):
         level = bytearray(0x14)
@@ -138,11 +142,17 @@ class PlayerStateTests(unittest.TestCase):
         struct.pack_into("<fB", data, 0x14, 3.5, 2)
         struct.pack_into("<f", data, 0x20, 6)
         fields = decode_fields(0x024F, data)
-        updates = cooldown_history([{"t": 30, "event": "CooldownUpdate", "fields": fields}], [4, 5])
-        self.assertEqual(updates[0]["updates"], [{
+        updates = cooldown_history([
+            {"t": 30, "event": "CooldownUpdate", "fields": fields},
+            {"t": 31, "event": "CooldownUpdate", "fields": {**fields, "remaining_seconds": 0}},
+        ], [4, 5])
+        self.assertEqual(updates[0]["updates"][0], {
             "t": 30, "slot": 2, "remaining_seconds": 3.5, "display_duration_seconds": 6,
-            "projected_ready_at": 33.5,
-        }])
+            "projected_ready_at": 33.5, "adjustment": None,
+        })
+        self.assertEqual(updates[0]["updates"][1]["adjustment"], {
+            "type": "cleared", "seconds": 2.5, "measurement": "derived", "cause": None,
+        })
         self.assertIsNone(updates[1]["updates"])
         data = bytearray(0x20)
         struct.pack_into("<IBBxxffI", data, 0x0C, 4, 5, 9, 6, 3, 4)
@@ -156,7 +166,7 @@ class PlayerStateTests(unittest.TestCase):
                              (8, "BuffAdd2"), (9, "BuffStackUpdate")]
         ], 20)
         self.assertEqual([event["stacks"] for event in passive["history"]], [1, 5, 0, 1, 5])
-        self.assertEqual(passive["observed_uptime_fraction"], 0.3)
+        self.assertEqual(passive["observed_uptime_fraction"], 0.35)
         self.assertEqual(passive["observed_max_stack_seconds"], 3)
         self.assertEqual(passive["unresolved_transitions"], 1)
 

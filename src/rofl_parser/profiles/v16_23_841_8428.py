@@ -1,5 +1,6 @@
 """Verified packet identities and decoded object layouts for build 16.23.841.8428."""
 
+import math
 import struct
 from collections.abc import Callable
 
@@ -11,7 +12,9 @@ PROTOCOL_HEADER = "8bbfcd5af2bc92db"
 BINARY_SHA256 = "64a3d49aa9a3dbf69c6c2bda8e7abd42f33a0708aa655892b818476b609a161e"
 OBJECT_SPAWN_ID = 0x00BB
 LANE_MINION_SPAWN_ID = 0x00BD
+NEUTRAL_SPAWN_ID = 0x0188
 UNIT_DEATH_ID = 0x04AD
+CHAMPION_DEATH_ID = 0x049F
 STAT_UPDATE_ID = 0x0135
 LEVEL_UP_ID = 0x03F3
 CONTEXT_NOTIFICATION_ID = 0x002D
@@ -21,24 +24,38 @@ MINION_CREDIT_ID = 0x030F
 BUFF_ADD_ID = 0x0277
 BUFF_REMOVE_ID = 0x0346
 BUFF_STACK_ID = 0x0380
+MISSILE_IMPACT_ID = 0x0310
+MISSILE_REMOVE_ID = 0x00D5
+MISSILE_DIMENSION_ID = 0x02AA
+ATTACK_CONTROL_ID = 0x02D9
+ITEM_SLOT_UPDATE_ID = 0x031D
+ITEM_SWAP_ID = 0x00E2
 PACKETS = {
     CONTEXT_NOTIFICATION_ID: ("ContextualNotification", 0x198AFD0, 0xE01EC0),
     0x0060: ("WaypointGroup", 0x19894B0, 0xE31D90),
     OBJECT_SPAWN_ID: ("ObjectSpawn", 0x198A088, 0xE2DA70),
     LANE_MINION_SPAWN_ID: ("LaneMinionSpawn", 0x198FC50, 0xE9F7B0),
+    MISSILE_REMOVE_ID: ("MissileRemove", 0x198D368, 0xEDD7B0),
+    ITEM_SWAP_ID: ("SwapItemAnswer", 0x1989B68, 0xE302C0),
     STAT_UPDATE_ID: ("ReplicatedFields", 0x19869B0, 0xCFA900),
     0x0167: ("BasicAttackPosMinion", 0x198CD60, 0xEA12C0),
+    NEUTRAL_SPAWN_ID: ("NeutralSpawn", 0x1985660, 0xD05A30),
     0x0212: ("DamageEvent", 0x1986078, 0xD26E90),
     0x0234: ("SpellCast", 0x198CDC0, 0xEB8130),
     COOLDOWN_UPDATE_ID: ("SetCooldown", 0x19867E0, 0xCF6DF0),
     BUFF_ADD_ID: ("BuffAdd2", 0x198C770, 0xEB13D0),
     0x027F: ("MissileReplication", 0x198D258, 0xEAC290),
+    MISSILE_DIMENSION_ID: ("MissileDimensionUpdate", 0x198D3F8, 0xEF9450),
+    ATTACK_CONTROL_ID: ("AttackControl", 0x1985E18, 0xCF9A10),
     MINION_CREDIT_ID: ("IncrementMinionKills", 0x198A268, 0xDCF8A0),
+    MISSILE_IMPACT_ID: ("MissileImpact", 0x198D2D8, 0xEC9DB0),
+    ITEM_SLOT_UPDATE_ID: ("ItemSlotUpdate", 0x19899F8, 0xDCF280),
     BUFF_REMOVE_ID: ("BuffRemove2", 0x198C880, 0xEB45B0),
     ITEM_ACQUISITION_ID: ("BuyItemAnswer", 0x19899C8, 0xDC9680),
     BUFF_STACK_ID: ("BuffUpdateCount", 0x198C908, 0xEB68E0),
     0x03E0: ("BasicAttackPos", 0x198CD00, 0xEA1480),
     LEVEL_UP_ID: ("NpcLevelUp", 0x1985D28, 0xCFA4E0),
+    CHAMPION_DEATH_ID: ("NpcHeroDie", 0x1985ED0, 0xCF93E0),
     UNIT_DEATH_ID: ("NpcDeathMapView", 0x1985EA0, 0xCF8B30),
 }
 EVENTS = {
@@ -46,22 +63,31 @@ EVENTS = {
     0x0060: "WaypointGroup",
     OBJECT_SPAWN_ID: "EntityCreate",
     LANE_MINION_SPAWN_ID: "EntityCreate",
+    MISSILE_REMOVE_ID: "MissileRemove",
+    ITEM_SWAP_ID: "InventorySwap",
     STAT_UPDATE_ID: "StatUpdate",
     0x0167: "BasicAttackMinion",
+    NEUTRAL_SPAWN_ID: "EntityCreate",
     0x0212: "DamageEvent",
     0x0234: "SpellCast",
     COOLDOWN_UPDATE_ID: "CooldownUpdate",
     BUFF_ADD_ID: "BuffAdd2",
     0x027F: "MissileTrajectory",
+    MISSILE_DIMENSION_ID: "MissileDimensionUpdate",
+    ATTACK_CONTROL_ID: "AttackControl",
     MINION_CREDIT_ID: "MinionCreditIncrement",
+    MISSILE_IMPACT_ID: "MissileImpact",
+    ITEM_SLOT_UPDATE_ID: "InventorySlotUpdate",
     BUFF_REMOVE_ID: "BuffRemove2",
     ITEM_ACQUISITION_ID: "ItemAcquired",
     BUFF_STACK_ID: "BuffStackUpdate",
     0x03E0: "BasicAttack",
     LEVEL_UP_ID: "LevelUp",
+    CHAMPION_DEATH_ID: "ChampionDeath",
     UNIT_DEATH_ID: "UnitDeath",
 }
 EZREAL_W_MARK_HASH = 0x00931FC8
+EZREAL_Q_HASH = 0x0D18B851
 EZREAL_PASSIVE_HASH = 0x073842B3
 RECALL_HASH = 0x078B982C
 RECALL_NOTIFICATIONS = {
@@ -76,6 +102,8 @@ SENDER_TABLE_RVA = 0x19A7640
 MEMSET_RVA = 0x1870050
 TEAM_REGISTRY_RVA = 0x1CFA918
 TEAM_REGISTRY_COUNT = 4
+IMPACT_POSITION_TABLE_RVA = 0x192E910
+LANE_MINION_TYPES = {4: "melee_minion", 5: "caster_minion", 6: "cannon_minion", 7: "super_minion"}
 
 U32 = struct.Struct("<I")
 U16 = struct.Struct("<H")
@@ -83,6 +111,20 @@ F32 = struct.Struct("<f")
 VEC3 = struct.Struct("<fff")
 POINTER = struct.Struct("<Q")
 STRING = struct.Struct("<QI")
+IMPACT_ENTRY_SIZE = 24
+
+
+def rotate_byte(value: int, bits: int) -> int:
+    return ((value >> bits) | (value << (8 - bits))) & 0xFF
+
+
+def impact_target_byte(value: int) -> int:
+    value = rotate_byte(~rotate_byte(value ^ 0xE8, 4) & 0xFF, 7)
+    value = ((value >> 1) & 0x55) | ((value & 0x55) << 1)
+    return rotate_byte(value, 3)
+
+
+IMPACT_TARGET_BYTES = bytes(impact_target_byte(value) for value in range(256))
 
 
 def read_string(data: bytearray, offset: int, read_heap: Callable[[int, int], bytes]) -> str:
@@ -93,6 +135,7 @@ def read_string(data: bytearray, offset: int, read_heap: Callable[[int, int], by
 def decode_fields(
     packet_id: int, data: bytearray, read_heap: Callable[[int, int], bytes] | None = None,
     champions: set[int] | None = None,
+    *, impact_position_bytes: bytes | None = None,
 ) -> dict:
     def uint(offset: int) -> int:
         return U32.unpack_from(data, offset)[0]
@@ -106,7 +149,8 @@ def decode_fields(
     def xyz(offset: int) -> tuple[float, float, float]:
         return VEC3.unpack_from(data, offset)
 
-    if packet_id in {0x0060, OBJECT_SPAWN_ID, STAT_UPDATE_ID, CONTEXT_NOTIFICATION_ID} and read_heap is None:
+    if packet_id in {0x0060, OBJECT_SPAWN_ID, NEUTRAL_SPAWN_ID, STAT_UPDATE_ID, CONTEXT_NOTIFICATION_ID,
+                     MISSILE_IMPACT_ID} and read_heap is None:
         raise ValueError("packet reader requires access to its decoded heap buffer")
 
     if packet_id == CONTEXT_NOTIFICATION_ID:
@@ -139,6 +183,53 @@ def decode_fields(
     if packet_id == MINION_CREDIT_ID:
         return {"entity_id": uint(0x10), "delta": 1}
 
+    if packet_id == CHAMPION_DEATH_ID:
+        position = xyz(0x34)
+        return {
+            "entity_id": uint(0x0C), "killer_id": uint(0x50) or None, "respawn_seconds": real(0x20),
+            "position": position if position[0] or position[2] else None,
+        }
+
+    if packet_id == MISSILE_IMPACT_ID:
+        count = uint(0x20)
+        pointer, = POINTER.unpack_from(data, 0x18)
+        impacts = read_heap(pointer, count * IMPACT_ENTRY_SIZE) if count else b""
+        targets = [
+            U32.unpack(impacts[offset + 20:offset + 24].translate(IMPACT_TARGET_BYTES))[0]
+            for offset in range(0, len(impacts), IMPACT_ENTRY_SIZE)
+        ]
+        result = {"missile_id": uint(0x0C), "targets": targets}
+        if impact_position_bytes is not None:
+            result["impacts"] = []
+            for index, target in enumerate(targets):
+                offset = index * IMPACT_ENTRY_SIZE + 8
+                position = VEC3.unpack(impacts[offset:offset + VEC3.size].translate(impact_position_bytes))
+                result["impacts"].append({
+                    "target_id": target, "position": position if all(math.isfinite(x) for x in position) else None,
+                })
+        return result
+
+    if packet_id == MISSILE_REMOVE_ID:
+        return {"missile_id": uint(0x0C), "reason_code": data[0x10]}
+
+    if packet_id == MISSILE_DIMENSION_ID:
+        return {"missile_id": uint(0x0C), "dimension_code": data[0x10]}
+
+    if packet_id == ATTACK_CONTROL_ID:
+        return {
+            "attacker": uint(0x0C), "other_entity_id": uint(0x10) or None,
+            "sequence": uint(0x18), "flags": [data[0x14], *data[0x1C:0x1F]],
+        }
+
+    if packet_id == ITEM_SLOT_UPDATE_ID:
+        return {
+            "entity_id": uint(0x0C), "slot": data[0x16], "remaining_quantity": data[0x15],
+            "gold_after": real(0x10), "action_code": data[0x14],
+        }
+
+    if packet_id == ITEM_SWAP_ID:
+        return {"entity_id": uint(0x0C), "from_slot": data[0x10], "to_slot": data[0x11]}
+
     if packet_id == BUFF_STACK_ID:
         return {
             "target": uint(0x0C), "caster": uint(0x1C), "slot": data[0x11],
@@ -168,6 +259,14 @@ def decode_fields(
             "entity_id": uint(0x0C),
             "spawner_id": uint(0x1C),
             "spawn_time": real(0x24),
+            "minion_type": LANE_MINION_TYPES.get(data[0x18]),
+        }
+
+    if packet_id == NEUTRAL_SPAWN_ID:
+        return {
+            "kind": "jungle", "entity_id": uint(0x0C), "position": xyz(0x18),
+            "name": read_string(data, 0x38, read_heap), "skin": read_string(data, 0x90, read_heap),
+            "mode_hint": read_string(data, 0xB0, read_heap) or None,
         }
 
     if packet_id == UNIT_DEATH_ID:
@@ -226,7 +325,7 @@ def decode_fields(
     if packet_id == BUFF_REMOVE_ID:
         return {"target": uint(0x0C), "buff_hash": uint(0x10), "slot": data[0x18]}
     if packet_id == 0x027F:
-        return {
+        missile = {
             "trajectory_position": xyz(0x14),
             "caster": uint(0x70),
             "missile_id": uint(0xD4),
@@ -239,6 +338,9 @@ def decode_fields(
             "source_xyz": xyz(0x74),
             "aim_xyz": xyz(0x9C),
         }
+        if missile["cast_spell_hash"] == EZREAL_Q_HASH:
+            missile["q_launch_xyz"] = xyz(0x1B4)
+        return missile
     attack = {
         "attacker": uint(0x0C),
         "target": uint(0x44),

@@ -49,7 +49,7 @@ class CombatProfileTests(unittest.TestCase):
         export_rows(replay, decoder, argparse.Namespace(packet_id=[0x04AD], raw=False, limit=3), output)
 
         replay.iter_packets.assert_called_once_with(
-            streams={1}, packet_ids={0x00BD, 0x00BB, 0x04AD}, include_payload=True,
+            streams={1}, packet_ids={0x00BD, 0x00BB, 0x0188, 0x04AD}, include_payload=True,
         )
         rows = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual([r["event"] for r in rows], ["MinionDeath", "UnitDeath", "UnitDeath"])
@@ -106,11 +106,13 @@ class CombatProfileTests(unittest.TestCase):
         struct.pack_into("<I", lane_minion, 0x0C, 0x400002E6)
         struct.pack_into("<I", lane_minion, 0x1C, 0x4000012C)
         struct.pack_into("<f", lane_minion, 0x24, 30.0)
+        lane_minion[0x18] = 6
         self.assertEqual(decode_fields(0x00BD, lane_minion), {
             "kind": "lane_minion",
             "entity_id": 0x400002E6,
             "spawner_id": 0x4000012C,
             "spawn_time": 30.0,
+            "minion_type": "cannon_minion",
         })
         self.assertEqual(event_name(0x00BB, fields), "EntityCreate")
 

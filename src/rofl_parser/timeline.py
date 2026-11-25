@@ -1,17 +1,26 @@
 """Summarize observed player state and killing blows at minute boundaries."""
 
+import gzip
 import json
 import math
+import os
 import sys
+import tempfile
 from collections import Counter, defaultdict
 
-from .profiles.v16_23_841_8428 import EZREAL_PASSIVE_HASH
+from . import __version__
+from .coaching import entity_catalog, minion_history
+from .event_reports import (
+    ATTACK_EVENTS, DEATH_EVENTS, POSITION_EVENTS, Q_EVENTS, W_EVENTS,
+    attack_history, death_windows, ezreal_q_history, ezreal_w_history, position_history,
+)
+from .profiles.v16_23_841_8428 import EZREAL_PASSIVE_HASH, PACKETS, VERSION, PROTOCOL_HEADER
 from .transport import Replay
 
-STATE_FIELDS = ("total_gold", "current_gold", "xp", "hp", "max_hp",
+STATE_FIELDS = ("total_gold", "current_gold", "xp", "hp", "max_hp", "all_shield",
                 "primary_resource", "max_primary_resource", "level")
 CHECKPOINTS = (5, 10, 15)
-TIMELINE_EVENTS = {"StatUpdate", "LevelUp", "MinionDeath", "UnitDeath", "MinionCreditIncrement"}
+TIMELINE_EVENTS = {"StatUpdate", "LevelUp", "MinionDeath", "UnitDeath", "MinionCreditIncrement", "EntityCreate"}
 BUFF_EVENTS = {
     "BuffAdd2", "BuffRemove2", "BuffStackUpdate", "EzrealWMarkApplied",
     "RecallBuffApplied", "RecallBuffRemoved",
@@ -35,6 +44,52 @@ def load_events(file, replay: Replay, *, extra_events: set[str] | None = None) -
         if row["event"] in selected:
             events.append(row)
     return sorted(events, key=lambda row: row["t"])
+
+
+def open_event_stream(path):
+    return (gzip.open(path, "rt", encoding="utf-8") if path.suffix.lower() == ".gz"
+            else path.open(encoding="utf-8"))
+
+
+def verify_event_stream(path, replay: Replay) -> dict:
+    """Check full, ordered packet identity, not semantic correctness of decoded fields."""
+    if (replay.version, replay.protocol_header) != (VERSION, PROTOCOL_HEADER):
+        raise ValueError("event verification requires a supported exact replay profile")
+    expected = iter(replay.iter_packets(streams={1}, packet_ids=PACKETS))
+    count = 0
+    last_time = None
+    with open_event_stream(path) as stream:
+        for line_number, line in enumerate(stream, 1):
+            row = json.loads(line)
+            packet = next(expected, None)
+            if packet is None:
+                raise ValueError(f"event line {line_number}: unexpected extra packet")
+            actual = tuple(row.get(key) for key in (
+                "chunk_file_offset", "block_offset", "payload_offset", "pid", "sender", "length"))
+            wanted = (packet.chunk.file_offset, packet.block_offset, packet.payload_offset,
+                      packet.packet_id, packet.param, packet.payload_size)
+            if (row.get("version") != replay.version or row.get("match") != replay.path.stem
+                    or actual != wanted or row.get("t") != packet.timestamp):
+                raise ValueError(f"event line {line_number}: packet identity/order differs from replay")
+            count += 1
+            last_time = packet.timestamp
+    if next(expected, None) is not None:
+        raise ValueError(f"event stream incomplete after {count} rows; full combat export required")
+    return {"verified_packet_rows": count, "last_packet_timestamp": last_time,
+            "replay_sha256": replay.sha256, "measurement": "raw_packet_identity",
+            "semantic_correctness": None}
+
+
+def resolve_riot_id(riot_id: str, footers: dict) -> int:
+    name, sep, tag = riot_id.rpartition("#")
+    if not sep or not name.strip() or not tag.strip():
+        raise ValueError("--riot-id requires GameName#TagLine")
+    matches = [entity for entity, footer in footers.items()
+               if str(footer.get("RIOT_ID_GAME_NAME", "")).casefold() == name.casefold()
+               and str(footer.get("RIOT_ID_TAG_LINE", "")).casefold() == tag.casefold()]
+    if len(matches) != 1:
+        raise ValueError("Riot ID does not resolve to exactly one verified participant")
+    return matches[0]
 
 
 def apply_state(known: dict, row: dict) -> None:
@@ -238,16 +293,31 @@ def build_cast_report(events: list[dict], entities: list[int], footers: dict) ->
 
 def cooldown_history(events: list[dict], entities: list[int]) -> list[dict]:
     histories = {entity: [] for entity in entities}
+    previous = {}
     for row in events:
         if row["event"] != "CooldownUpdate":
             continue
         fields = row["fields"]
         if fields["entity_id"] in histories:
+            key = fields["entity_id"], fields["slot"]
+            earlier = previous.get(key)
+            adjustment = None
+            if earlier is not None:
+                old_time, old_remaining = earlier
+                before = max(0.0, old_remaining - (row["t"] - old_time))
+                reduction = before - max(0.0, fields["remaining_seconds"])
+                if reduction > .15:
+                    adjustment = {
+                        "seconds": reduction, "measurement": "derived", "cause": None,
+                        "type": "cleared" if fields["remaining_seconds"] <= 0 else "shortened",
+                    }
             histories[fields["entity_id"]].append({
                 "t": row["t"], "slot": fields["slot"], "remaining_seconds": fields["remaining_seconds"],
                 "display_duration_seconds": fields["display_duration_seconds"],
                 "projected_ready_at": row["t"] + max(0.0, fields["remaining_seconds"]),
+                "adjustment": adjustment,
             })
+            previous[key] = (row["t"], fields["remaining_seconds"])
     return [{"entity_id": entity, "updates": rows or None} for entity, rows in histories.items()]
 
 
@@ -257,6 +327,7 @@ def ezreal_passive_history(rows: list[dict], duration: float) -> dict | None:
     max_started = None
     active_seconds = max_stack_seconds = 0.0
     episode_max_seconds = 0.0
+    last_active = None
     observed_stacks = False
     unresolved = 0
     for row in rows:
@@ -266,7 +337,12 @@ def ezreal_passive_history(rows: list[dict], duration: float) -> dict | None:
         if row["event"] == "BuffAdd2":
             if started is not None:
                 unresolved += 1
+                active_seconds += last_active - started
+                max_stack_seconds += episode_max_seconds
+                if max_started is not None:
+                    max_stack_seconds += last_active - max_started
             started = time
+            last_active = time
             max_started = None
             episode_max_seconds = 0.0
             history.append({"t": time, "stacks": 1, "event": row["event"]})
@@ -291,9 +367,16 @@ def ezreal_passive_history(rows: list[dict], duration: float) -> dict | None:
             elif max_started is not None:
                 episode_max_seconds += time - max_started
                 max_started = None
+            if started is not None:
+                last_active = time
             history.append({"t": time, "stacks": stacks, "event": row["event"]})
     if not history:
         return None
+    if started is not None:
+        active_seconds += last_active - started
+        max_stack_seconds += episode_max_seconds
+        if max_started is not None:
+            max_stack_seconds += last_active - max_started
     return {
         "history": history,
         "observed_active_seconds": active_seconds,
@@ -316,8 +399,28 @@ def buff_history(events: list[dict], entities: list[int], duration: float) -> li
     ]
 
 
+def write_report(result: dict, output) -> None:
+    if output is None:
+        json.dump(result, sys.stdout, indent=2, allow_nan=False)
+        sys.stdout.write("\n")
+        return
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent, delete=False) as stream:
+            pending = stream.name
+            json.dump(result, stream, indent=2, allow_nan=False)
+            stream.write("\n")
+        os.replace(pending, output)
+        pending = None
+    finally:
+        if pending is not None:
+            os.unlink(pending)
+
+
 def run(args) -> int:
     try:
+        if args.output and args.output.resolve() in {args.replay.resolve(), args.events.resolve()}:
+            raise ValueError("report output must differ from both inputs")
         replay = Replay.open(args.replay)
         extra_events = set()
         if args.casts:
@@ -326,14 +429,34 @@ def run(args) -> int:
             extra_events.add("CooldownUpdate")
         if args.buffs:
             extra_events.update(BUFF_EVENTS)
-        with args.events.open(encoding="utf-8") as source:
+        if args.ezreal_q:
+            extra_events.update(Q_EVENTS)
+        if args.ezreal_w:
+            extra_events.update(W_EVENTS)
+        if args.positions:
+            extra_events.update(POSITION_EVENTS)
+        if args.attacks:
+            extra_events.update(ATTACK_EVENTS)
+        if args.death_windows:
+            extra_events.update(DEATH_EVENTS)
+        if args.farm:
+            extra_events.add("DamageEvent")
+        stream_verification = verify_event_stream(args.events, replay) if args.verify_events else None
+        with open_event_stream(args.events) as source:
             events = load_events(source, replay, extra_events=extra_events)
         duration = replay.metadata["gameLength"] / 1000
         if not math.isfinite(duration) or duration < 0:
             raise ValueError("invalid match duration")
-        report = build_report(events, duration, args.player_id, args.opponent_id)
-        entities = [row["entity_id"] for row in report["snapshots"][0]["players"]]
         footers = matched_footers(events, replay.participants)
+        player = resolve_riot_id(args.riot_id, footers) if args.riot_id else args.player_id
+        if player is not None and player == args.opponent_id:
+            raise ValueError("player and opponent must differ")
+        report = build_report(events, duration, player, args.opponent_id)
+        entities = [row["entity_id"] for row in report["snapshots"][0]["players"]]
+        catalog = entity_catalog(events, footers)
+        report["entity_catalog"] = catalog
+        report["players"] = [{"entity_id": entity, "champion_name": footers.get(entity, {}).get("SKIN")}
+                             for entity in entities]
         report["final_cs"] = build_final_cs(entities, footers)
         if args.casts:
             report["casts"] = build_cast_report(events, entities, footers)
@@ -341,8 +464,39 @@ def run(args) -> int:
             report["cooldowns"] = cooldown_history(events, entities)
         if args.buffs:
             report["buffs"] = buff_history(events, entities, duration)
-        result = {"match": replay.path.stem, "version": replay.version, **report}
-        print(json.dumps(result, indent=2, allow_nan=False))
+        if args.ezreal_q:
+            report["ezreal_q"] = ezreal_q_history(events, entities, footers, catalog)
+        if args.ezreal_w:
+            report["ezreal_w"] = ezreal_w_history(events, entities)
+        if args.attacks:
+            report["attacks"] = attack_history(events, entities, catalog)
+        if args.positions or args.death_windows:
+            positions = position_history(events, entities)
+            if args.positions:
+                report["positions"] = positions
+            if args.death_windows:
+                report["death_windows"] = death_windows(events, entities, positions, footers, catalog)
+        if args.farm:
+            report["farm"] = minion_history(events, entities, catalog)
+        mode_hints = sorted({row["fields"]["mode_hint"] for row in events if row["event"] == "EntityCreate"
+                             and row["fields"].get("mode_hint")})
+        report["game_mode_hint"] = mode_hints[0] if len(mode_hints) == 1 else None
+        report["coverage"].update(
+            participant_footer_matches=len(footers), footer_participants=len(replay.participants),
+            named_entities=sum(bool(entity["name"]) for entity in catalog.values()),
+            continuous_positions=None,
+        )
+        report["validation"] = {
+            "replay_identity": "event rows checked against replay file stem and build",
+            "participant_identity": "unique final gold, XP and level",
+            "event_stream_complete": True if stream_verification is not None else None,
+            "event_stream_verification": stream_verification,
+            "game_mode": "neutral spawn variant hint" if report["game_mode_hint"] else None,
+        }
+        result = {"schema_version": 1, "parser_version": __version__, "match_id": replay.path.stem,
+                  "match": replay.path.stem, "version": replay.version, "duration_seconds": duration,
+                  "selected_player_id": player, **report}
+        write_report(result, args.output)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

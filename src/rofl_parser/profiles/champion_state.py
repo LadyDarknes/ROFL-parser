@@ -9,7 +9,7 @@ FLOAT = struct.Struct("<f")
 CHAMPION_GROUP_MASKS = (0x0FFFFFFF, 0x7F, 0xFFFFFFFF, 0xFFFFFFFF, 0x3F, 0xFFFFFFFF)
 GOLD_FIELDS = {0: "current_gold", 1: "total_gold"}
 STATE_FIELDS = {
-    0: "hp", 1: "max_hp", 11: "xp", 15: "primary_resource", 16: "max_primary_resource",
+    0: "hp", 1: "max_hp", 3: "all_shield", 11: "xp", 15: "primary_resource", 16: "max_primary_resource",
 }
 
 
