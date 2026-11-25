@@ -2,6 +2,8 @@
 
 Read League of Legends replay files from disk. Inspect packet IDs, timestamps, sizes and raw payloads. On supported builds, combat export covers all champions in the recorded match stream.
 
+Nearly all of this project's original code, tests, and documentation were AI-generated with OpenAI Codex. The maintainer set the project direction, supplied replay samples, and provided feedback.
+
 ## Install
 
 ```sh
